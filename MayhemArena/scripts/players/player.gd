@@ -322,6 +322,10 @@ func fire_attack(attack: Dictionary, secondary: bool) -> void:
 	else:
 		primary_cooldown = int(attack["cooldown"])
 	start_weapon_visual("secondary" if secondary else "primary")
+	var text_effect := str(attack.get("text_effect", ""))
+	var text_on_attack := attack_type not in ["melee", "bat_throw", "bomb", "homing", "homing_jokes"]
+	if text_on_attack and not text_effect.is_empty() and is_instance_valid(arena):
+		arena.spawn_combat_text(muzzle_position() + Vector2(10.0 * facing, -20.0), text_effect, player_color, text_effect in ["BOOM!", "SNIPED"])
 	if attack_type in ["bullet", "bullet_burst", "pellet_burst", "rocket", "homing", "homing_jokes", "arrow", "arrow_burst", "knife", "bomb", "throw_gun"]:
 		muzzle_flash_frames = 3
 		weapon_kick_frames = 4
@@ -366,11 +370,11 @@ func fire_attack(attack: Dictionary, secondary: bool) -> void:
 			arena.spawn_bomb(self, muzzle_position(), facing, attack)
 			consume_ammo(int(attack.get("ammo_cost", 1)))
 		"melee":
-			var melee_hits: int = arena.melee_attack(self, float(attack["range"]), float(attack["min_y"]), float(attack["max_y"]), float(attack["damage"]), float(attack["knockback"]), float(attack["vertical"]), int(attack["hitstop"]), bool(attack.get("respect_umbrella", false)), float(attack.get("block_ammo_damage", 0.0)), int(attack.get("stun", 0)))
+			var melee_hits: int = arena.melee_attack(self, float(attack["range"]), float(attack["min_y"]), float(attack["max_y"]), float(attack["damage"]), float(attack["knockback"]), float(attack["vertical"]), int(attack["hitstop"]), bool(attack.get("respect_umbrella", false)), float(attack.get("block_ammo_damage", 0.0)), int(attack.get("stun", 0)), text_effect)
 			if bool(attack.get("ammo_on_hit", false)) and melee_hits > 0:
 				consume_ammo(int(attack.get("ammo_cost", 1)))
 		"bat_throw":
-			var hit_count: int = arena.melee_attack(self, float(attack["range"]), float(attack["min_y"]), float(attack["max_y"]), float(attack["damage"]), float(attack["knockback"]), float(attack["vertical"]), int(attack["hitstop"]))
+			var hit_count: int = arena.melee_attack(self, float(attack["range"]), float(attack["min_y"]), float(attack["max_y"]), float(attack["damage"]), float(attack["knockback"]), float(attack["vertical"]), int(attack["hitstop"]), false, 0.0, 0, "POW")
 			if hit_count == 0:
 				arena.spawn_baseball(self, muzzle_position(), facing, attack)
 			consume_ammo(int(attack.get("ammo_cost", 1)))
@@ -383,14 +387,14 @@ func fire_attack(attack: Dictionary, secondary: bool) -> void:
 			katana_events = [{"frames": 0, "power": 12.0}, {"frames": 11, "power": 13.0}]
 		"katana_uppercut":
 			velocity.y = -9.0
-			arena.melee_attack(self, 75.0, -80.0, 30.0, 20.0, 25.0, -10.0, 2, true, 20.0, 0)
+			arena.melee_attack(self, 75.0, -80.0, 30.0, 20.0, 25.0, -10.0, 2, true, 20.0, 0, "OUCH :(")
 
 func process_katana_events() -> void:
 	for index in range(katana_events.size() - 1, -1, -1):
 		katana_events[index]["frames"] = int(katana_events[index]["frames"]) - 1
 		if int(katana_events[index]["frames"]) <= 0:
 			var power := float(katana_events[index]["power"])
-			arena.melee_attack(self, 65.0 if power == 12.0 else 75.0, -40.0, 30.0, 20.0, power, 0.0, 2, true, power * 0.8, 0)
+			arena.melee_attack(self, 65.0 if power == 12.0 else 75.0, -40.0, 30.0, 20.0, power, 0.0, 2, true, power * 0.8, 0, "OUCH :(")
 			if power == 13.0:
 				velocity.x += 6.0 * facing
 			katana_events.remove_at(index)
@@ -785,12 +789,22 @@ func draw_pickup_weapon() -> void:
 func draw_muzzle_flash() -> void:
 	var muzzle := muzzle_position() - position
 	var alpha := float(muzzle_flash_frames) / 3.0
-	var length := 10.0 + float(muzzle_flash_frames) * 3.0
+	var secondary_scale := 1.35 if visual_action == "secondary" else 1.0
+	var weapon_scale := 1.35 if weapon_id in [6, 8, 12, 18] else (0.82 if weapon_id in [13, 14, 15] else 1.0)
+	var length := (10.0 + float(muzzle_flash_frames) * 3.0) * secondary_scale * weapon_scale
+	var flash_color := Color("ffd166")
+	if weapon_id in [8, 18]:
+		flash_color = Color("ff8a3d")
+	elif weapon_id in [11, 17]:
+		flash_color = Color("d9e1e8")
 	var tip := muzzle + Vector2(length * facing, 0)
-	var upper := muzzle + Vector2(2.0 * facing, -5.0 - muzzle_flash_frames)
-	var lower := muzzle + Vector2(2.0 * facing, 5.0 + muzzle_flash_frames)
-	draw_colored_polygon(PackedVector2Array([muzzle, upper, tip, lower]), Color(1.0, 0.72, 0.12, alpha))
-	draw_circle(muzzle, 3.0 + muzzle_flash_frames, Color(1.0, 0.95, 0.62, alpha))
+	var spread := (5.0 + muzzle_flash_frames) * secondary_scale * weapon_scale
+	var upper := muzzle + Vector2(2.0 * facing, -spread)
+	var lower := muzzle + Vector2(2.0 * facing, spread)
+	draw_colored_polygon(PackedVector2Array([muzzle, upper, tip, lower]), Color(flash_color, alpha))
+	draw_circle(muzzle, 3.0 + muzzle_flash_frames * secondary_scale, Color(1.0, 0.95, 0.62, alpha))
+	if weapon_id in [6, 7, 8, 12, 18] and muzzle_flash_frames == 3:
+		draw_line(muzzle + Vector2(4.0 * facing, -spread * 0.6), tip, Color(1.0, 0.98, 0.78, alpha * 0.8), 2.0)
 
 func draw_ellipse_shadow() -> void:
 	draw_set_transform(Vector2(0, 2), 0.0, Vector2(1.0, 0.32))

@@ -82,7 +82,14 @@ func _physics_process(_delta: float) -> void:
 					target.velocity.x += firepower * facing * 0.25
 				else:
 					target.take_damage(damage, firepower * facing, stun_frames, shooter)
-				arena.spawn_hit_effect(sample, shooter.player_color)
+				var hit_label := ""
+				if projectile_kind in ["arrow", "baseball"]:
+					hit_label = "POW"
+				elif projectile_kind == "knife":
+					hit_label = "SHANKED"
+				elif shooter.weapon_id == 12:
+					hit_label = "SNIPED"
+				arena.spawn_hit_effect(sample, shooter.player_color, hit_label)
 				queue_free()
 				return
 
@@ -121,7 +128,12 @@ func _physics_process(_delta: float) -> void:
 		queue_free()
 
 func detonate(at_position: Vector2) -> void:
-	arena.radial_attack(at_position, shooter, explicit_damage, firepower, blast_radius)
+	var detonation_label := "KABOOM!"
+	if projectile_kind == "bomb":
+		detonation_label = "BOOM!"
+	elif projectile_kind in ["homing", "homing_jokes"]:
+		detonation_label = "KABOOM!"
+	arena.radial_attack(at_position, shooter, explicit_damage, firepower, blast_radius, detonation_label)
 	queue_free()
 
 func steer_to_closest_target() -> void:

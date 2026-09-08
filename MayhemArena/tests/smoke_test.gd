@@ -107,6 +107,20 @@ func _init() -> void:
 	expect(player.weapon_frame_texture() != null, "AK primary attack must load the extracted raw weapon layer")
 	player.process_visual_animation()
 	expect(player.visual_frame == 2, "AK raw animation must advance one frame per 35 Hz tick")
+	var crate_visual_lengths := {6: 41, 7: 50, 8: 60, 9: 68, 10: 30, 11: 38, 12: 22, 13: 50, 14: 50, 15: 46, 16: 42, 17: 30, 18: 32}
+	for crate_id in WeaponCatalog.CRATE_WEAPON_IDS:
+		player.equip_weapon(crate_id, false)
+		player.start_weapon_visual("primary")
+		var primary_start := 1 if crate_id != 9 else 1
+		var primary_end := int(crate_visual_lengths[crate_id]) if crate_id != 9 else 32
+		expect(player.visual_action_active and player.visual_frame == primary_start and player.visual_frame_end == primary_end, "crate weapon %d primary animation must use its full controller timeline" % crate_id)
+		player.process_visual_animation()
+		expect(player.visual_frame == primary_start + 1, "crate weapon %d primary animation must advance one frame per tick" % crate_id)
+		player.start_weapon_visual("secondary")
+		var secondary_start := 1 if crate_id != 9 else 45
+		var secondary_end := int(crate_visual_lengths[crate_id]) if crate_id != 9 else 68
+		expect(player.visual_action_active and player.visual_frame == secondary_start and player.visual_frame_end == secondary_end, "crate weapon %d secondary animation must use its full controller timeline" % crate_id)
+	player.equip_weapon(1, false)
 	var visual_player := PlayerScript.new()
 	visual_player.setup(null, 0, Vector2.ZERO, Color("0099ff"), 1)
 	var cleaned_preview := visual_player.texture_for_weapon(1).get_image()
@@ -149,6 +163,16 @@ func _init() -> void:
 	game.spawn_small_wave(Vector2(300, 160))
 	game.update_effect(0)
 	expect(game.effects.size() == 1 and near(float(game.effects[0]["scale"]), 2.05), "small impact wave must follow the original half-distance scale easing")
+	game.effects.clear()
+	game.spawn_hit_effect(Vector2(300, 160), Color("0099ff"), "SNIPED")
+	expect(game.effects.size() == 7 and game.effects[0]["label"] == "SNIPED", "hit feedback must include the original label and shrapnel burst")
+	game.update_effect(2)
+	expect(game.effects[2]["type"] == "shrapnel" and float(game.effects[2]["scale"]) < 1.25, "shrapnel feedback must advance and fade")
+	game.effects.clear()
+	game.spawn_combat_text(Vector2(300, 160), "BOOM!", Color("ffd166"), true)
+	expect(game.effects.size() == 1 and game.effects[0]["type"] == "combat_text" and game.effects[0]["life_max"] == 20, "combat text must retain the original expanding lifetime")
+	game.update_effect(0)
+	expect(float(game.effects[0]["scale"]) > 1.0, "combat text must expand before fading")
 	game.effects.clear()
 	game.spawn_crate_open_effect(Vector2(300, 160))
 	expect(game.effects.size() == 6, "crate pickup must create four large and two small original fragments")

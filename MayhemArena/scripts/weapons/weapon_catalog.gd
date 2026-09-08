@@ -143,12 +143,12 @@ const WEAPONS := {
 		"name": "AK-47", "tagline": "Rifle with a brutal stock strike",
 		"primary_label": "Rifle Shot", "secondary_label": "Stock Strike", "ammo": 30, "crate_only": true,
 		"primary": {"type": "bullet", "firepower": 18.5, "speed": 25.0, "spread": 4.0, "recoil": 0.5, "cooldown": 5},
-		"secondary": {"type": "melee", "damage": 9.0, "range": 75.0, "min_y": -30.0, "max_y": 20.0, "knockback": 22.5, "vertical": -1.0, "hitstop": 2, "cooldown": 22},
+		"secondary": {"type": "melee", "damage": 9.0, "range": 75.0, "min_y": -30.0, "max_y": 20.0, "knockback": 22.5, "vertical": -1.0, "hitstop": 2, "cooldown": 22, "text_effect": "POW"},
 	},
 	10: {
 		"name": "BASEBALL BAT", "tagline": "Huge knockback or a fast baseball",
 		"primary_label": "Home Run", "secondary_label": "Pitch", "ammo": 5, "crate_only": true,
-		"primary": {"type": "melee", "damage": 34.0, "range": 75.0, "min_y": -30.0, "max_y": 20.0, "knockback": 70.0, "vertical": -10.0, "hitstop": 2, "cooldown": 28, "ammo_on_hit": true},
+		"primary": {"type": "melee", "damage": 34.0, "range": 75.0, "min_y": -30.0, "max_y": 20.0, "knockback": 70.0, "vertical": -10.0, "hitstop": 2, "cooldown": 28, "ammo_on_hit": true, "text_effect": "POW"},
 		"secondary": {"type": "bat_throw", "damage": 10.0, "range": 70.0, "min_y": -30.0, "max_y": 20.0, "knockback": 70.0, "vertical": -10.0, "hitstop": 2, "speed": 40.0, "cooldown": 28},
 	},
 	11: {
@@ -184,20 +184,20 @@ const WEAPONS := {
 	16: {
 		"name": "UMBRELLA", "tagline": "Block shots or strike back",
 		"primary_label": "Umbrella Strike", "secondary_label": "Open Umbrella", "ammo": 100, "crate_only": true,
-		"primary": {"type": "melee", "damage": 17.0, "range": 80.0, "min_y": -30.0, "max_y": 20.0, "knockback": 28.0, "vertical": -10.0, "hitstop": 2, "stun": 15, "cooldown": 25},
+		"primary": {"type": "melee", "damage": 17.0, "range": 80.0, "min_y": -30.0, "max_y": 20.0, "knockback": 28.0, "vertical": -10.0, "hitstop": 2, "stun": 15, "cooldown": 25, "text_effect": "POW"},
 		"secondary": {"type": "umbrella_open", "cooldown": 1, "semi_auto": true},
 	},
 	17: {
 		"name": "THROWING KNIFE", "tagline": "Stab close or throw a knife",
 		"primary_label": "Knife Stab", "secondary_label": "Throw Knife", "ammo": 10, "crate_only": true,
-		"primary": {"type": "melee", "damage": 25.0, "range": 75.0, "min_y": -30.0, "max_y": 20.0, "knockback": 19.0, "vertical": 0.0, "hitstop": 2, "respect_umbrella": true, "cooldown": 22},
+		"primary": {"type": "melee", "damage": 25.0, "range": 75.0, "min_y": -30.0, "max_y": 20.0, "knockback": 19.0, "vertical": 0.0, "hitstop": 2, "respect_umbrella": true, "cooldown": 22, "text_effect": "SHANKED"},
 		"secondary": {"type": "knife", "damage": 10.0, "firepower": 19.0, "speed": 30.0, "angle": -7.0, "spread": 0.0, "recoil": 0.0, "cooldown": 24},
 	},
 	18: {
 		"name": "BOMB", "tagline": "Bouncing explosive with two throws",
 		"primary_label": "Bouncy Bomb", "secondary_label": "Heavy Bomb", "ammo": 5, "crate_only": true,
-		"primary": {"type": "bomb", "damage": 32.0, "firepower": 40.0, "speed": 11.0, "recoil": 0.0, "cooldown": 30, "blast_radius": 50.0, "gravity": 1.26, "bounce": true},
-		"secondary": {"type": "bomb", "damage": 32.0, "firepower": 40.0, "speed": 16.0, "recoil": 0.0, "cooldown": 30, "blast_radius": 50.0, "gravity": 1.26, "bounce": false},
+		"primary": {"type": "bomb", "damage": 32.0, "firepower": 40.0, "speed": 11.0, "recoil": 0.0, "cooldown": 30, "blast_radius": 50.0, "gravity": 1.26, "bounce": true, "text_effect": "BOOM!"},
+		"secondary": {"type": "bomb", "damage": 32.0, "firepower": 40.0, "speed": 16.0, "recoil": 0.0, "cooldown": 30, "blast_radius": 50.0, "gravity": 1.26, "bounce": false, "text_effect": "BOOM!"},
 	},
 }
 

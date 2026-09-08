@@ -248,6 +248,22 @@ func update_effect(index: int) -> void:
 					effect["life"] = 1
 		"death_text":
 			effect["position"] = Vector2(effect["position"]) + Vector2(0, -0.7)
+		"combat_text":
+			effect["position"] = Vector2(effect["position"]) + Vector2(0, -1.5)
+			if int(effect["phase"]) == 1:
+				effect["scale"] += (float(effect["target_scale"]) - float(effect["scale"])) / 2.0
+				if float(effect["scale"]) > float(effect["target_scale"]) - 0.05:
+					effect["phase"] = 2
+			else:
+				effect["scale"] = maxf(0.05, float(effect["scale"]) - 0.05)
+		"shrapnel":
+			effect["position"] = Vector2(effect["position"]) + Vector2(effect["velocity"])
+			var shrapnel_velocity: Vector2 = effect["velocity"]
+			shrapnel_velocity.x *= 0.95
+			shrapnel_velocity.y += 0.35
+			effect["velocity"] = shrapnel_velocity
+			effect["rotation"] = float(effect["rotation"]) + float(effect["rotation_speed"])
+			effect["scale"] = maxf(0.05, float(effect["scale"]) - float(effect["shrink"]))
 		"crate_piece":
 			effect["position"] = Vector2(effect["position"]) + Vector2(effect["velocity"])
 			var crate_velocity: Vector2 = effect["velocity"]
@@ -741,6 +757,7 @@ func spawn_baseball(shooter: Node, start: Vector2, direction: int, attack: Dicti
 	)
 
 func spawn_homing(shooter: Node, start: Vector2, direction: int, attack: Dictionary, joke_variant: bool = false) -> void:
+	spawn_combat_text(start, "POOF", shooter.player_color)
 	var projectile := ProjectileScript.new()
 	add_child(projectile)
 	projectile.setup(
@@ -773,7 +790,7 @@ func point_hits_platform(point: Vector2) -> bool:
 			return true
 	return false
 
-func radial_attack(at_position: Vector2, shooter: Node, damage: float, power: float, radius: float) -> void:
+func radial_attack(at_position: Vector2, shooter: Node, damage: float, power: float, radius: float, hit_label: String = "") -> void:
 	for target in players:
 		if target.eliminated:
 			continue
@@ -787,7 +804,7 @@ func radial_attack(at_position: Vector2, shooter: Node, damage: float, power: fl
 			direction = float(shooter.facing)
 		target.take_damage(damage * strength, power * strength * direction, 0, shooter)
 		target.velocity.y -= power * 0.32 * strength
-	spawn_weapon_blast(at_position, shooter.player_color, radius)
+	spawn_weapon_blast(at_position, shooter.player_color, radius, hit_label)
 
 func melee_attack(
 		attacker: Node,
@@ -800,7 +817,8 @@ func melee_attack(
 		freeze: int,
 		respect_umbrella: bool = false,
 		block_ammo_damage: float = 0.0,
-		melee_stun: int = 0
+		melee_stun: int = 0,
+		hit_label: String = ""
 ) -> int:
 	var hit_count := 0
 	for target in players:
@@ -815,15 +833,35 @@ func melee_attack(
 				spawn_small_wave(target.position + Vector2(0, -24))
 			else:
 				target.receive_melee(damage, power, vertical, freeze, attacker, melee_stun)
-				spawn_hit_effect(target.position + Vector2(0, -24), attacker.player_color)
+				spawn_hit_effect(target.position + Vector2(0, -24), attacker.player_color, hit_label)
 				hit_count += 1
 	return hit_count
 
-func spawn_hit_effect(at_position: Vector2, color: Color) -> void:
-	effects.append({"type": "hit", "position": at_position, "color": color, "life": 7})
+func spawn_hit_effect(at_position: Vector2, color: Color, hit_label: String = "") -> void:
+	effects.append({"type": "hit", "position": at_position, "color": color, "label": hit_label if not hit_label.is_empty() else "HIT", "life": 7})
 	# The original hit path reuses the small expanding wave used by the crate
 	# and explosion feedback. Keep the text/spark layer as a readable supplement.
 	effects.append({"type": "small_wave", "position": at_position, "scale": 0.1, "life": 15})
+	spawn_shrapnel(at_position, color, 1, 5)
+
+func spawn_combat_text(at_position: Vector2, label: String, color: Color = Color.WHITE, big: bool = false) -> void:
+	if label.is_empty():
+		return
+	effects.append({
+		"type": "combat_text", "position": at_position + Vector2(0, -20), "text": label,
+		"color": color, "big": big, "scale": 1.0, "target_scale": 1.5 if big else 1.35,
+		"phase": 1, "rotation": randf_range(-0.08, 0.08), "life": 20, "life_max": 20,
+	})
+
+func spawn_shrapnel(at_position: Vector2, color: Color, direction: int = 1, amount: int = 4) -> void:
+	for index in amount:
+		effects.append({
+			"type": "shrapnel", "position": at_position,
+			"velocity": Vector2(randf_range(5.0, 15.0) * direction, randf_range(-5.0, 5.0)),
+			"rotation": randf_range(-0.5, 0.5), "rotation_speed": randf_range(-0.25, 0.25),
+			"scale": randf_range(0.8, 1.25), "shrink": randf_range(0.06, 0.14),
+			"color": color, "life": 20,
+		})
 
 func play_random_sound(sound_pool: Array, volume_db: float = 0.0) -> void:
 	if sound_pool.is_empty() or not is_inside_tree():
@@ -931,14 +969,18 @@ func spawn_projectile_trail(at_position: Vector2, color: Color) -> void:
 	effects.append({"type": "projectile_trail", "position": at_position, "color": color, "life": 10})
 
 func spawn_shell_eject(_shooter: Node, at_position: Vector2, direction: int, weapon_id: int) -> void:
-	# Procedural local feedback until the original shell sprites are integrated.
-	var shell_color := Color("e4bd68") if weapon_id != 2 else Color("d8d8c8")
+	# The reverse-engineered controllers use fx_shell for rifle/pistol cases and
+	# fx_shell2 for the larger shotgun/M4 discharge. Keep both variants visible
+	# until the original effect sprites are exported into the public asset set.
+	var shell_variant := 1 if weapon_id in [6, 7] else 0
+	var shell_color := Color("d8d8c8") if shell_variant == 1 or weapon_id == 2 else Color("e4bd68")
 	effects.append({
 		"type": "shell",
 		"position": at_position + Vector2(0, 4),
 		"velocity": Vector2(-direction * randf_range(2.5, 4.5), randf_range(-5.0, -2.5)),
 		"rotation": randf_range(-0.4, 0.4),
 		"rotation_speed": randf_range(-0.22, 0.22),
+		"variant": shell_variant,
 		"color": shell_color,
 		"life": 24,
 	})
@@ -978,8 +1020,10 @@ func spawn_explosion(at_position: Vector2, color: Color, source_velocity_x: floa
 		})
 	effects.append({"type": "death_text", "position": center + Vector2(-70, -30), "color": color, "life": 25})
 
-func spawn_weapon_blast(at_position: Vector2, color: Color, radius: float) -> void:
+func spawn_weapon_blast(at_position: Vector2, color: Color, radius: float, label: String = "") -> void:
 	effects.append({"type": "weapon_blast", "position": at_position, "color": color, "radius": radius, "life": 16})
+	if not label.is_empty():
+		spawn_combat_text(at_position, label, color, true)
 
 func process_weapon_crate_spawning() -> void:
 	if is_instance_valid(active_weapon_crate):
@@ -1086,7 +1130,7 @@ func _draw() -> void:
 		match effect["type"]:
 			"hit":
 				draw_circle(effect_position, 4.0 + life * 1.5, Color(effect_color, life / 7.0), false, 3.0)
-				draw_string(font, effect_position + Vector2(-12, -18), "HIT", HORIZONTAL_ALIGNMENT_LEFT, 45, 16, Color.WHITE)
+				draw_string(font, effect_position + Vector2(-38, -18), str(effect.get("label", "HIT")), HORIZONTAL_ALIGNMENT_CENTER, 76, 16, Color.WHITE)
 			"money":
 				draw_string(font, effect_position + Vector2(0, -18 + life * -0.6), "$", HORIZONTAL_ALIGNMENT_LEFT, 20, 18, Color("ffdd55"))
 			"death_flash":
@@ -1105,6 +1149,16 @@ func _draw() -> void:
 				draw_centered_texture(DeathBodyTextures[int(effect["frame"])], effect_position, 1.0, float(effect["rotation"]), Color.WHITE)
 			"death_text":
 				draw_string(font, effect_position, "KABOOM!", HORIZONTAL_ALIGNMENT_CENTER, 140, 25, Color(1, 1, 1, life / 25.0))
+			"combat_text":
+				var combat_scale := float(effect["scale"])
+				draw_set_transform(effect_position, float(effect["rotation"]), Vector2.ONE * combat_scale)
+				draw_string(font, Vector2(-110, 0), str(effect["text"]), HORIZONTAL_ALIGNMENT_CENTER, 220, 18 if not bool(effect["big"]) else 24, Color(0.03, 0.04, 0.05, life / float(effect["life_max"])))
+				draw_string(font, Vector2(-112, -2), str(effect["text"]), HORIZONTAL_ALIGNMENT_CENTER, 220, 18 if not bool(effect["big"]) else 24, Color(effect_color, life / float(effect["life_max"])))
+				draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+			"shrapnel":
+				draw_set_transform(effect_position, float(effect["rotation"]), Vector2.ONE * float(effect["scale"]))
+				draw_line(Vector2(-7, 0), Vector2(7, 0), Color(effect_color, life / 20.0), 2.0)
+				draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 			"stun":
 				draw_centered_texture(StunTexture, effect_position, float(effect["scale"]), 0.0, Color.WHITE)
 			"crate_piece":
@@ -1127,7 +1181,11 @@ func _draw() -> void:
 				draw_circle(effect_position, 1.5 + life * 0.18, Color(effect_color, life / 16.0))
 			"shell":
 				draw_set_transform(effect_position, float(effect["rotation"]), Vector2.ONE)
-				draw_rect(Rect2(-3, -1.5, 6, 3), Color(effect_color, minf(1.0, life / 8.0)), true)
+				var shell_variant := int(effect.get("variant", 0))
+				var shell_size := Vector2(8.0, 4.0) if shell_variant == 1 else Vector2(6.0, 3.0)
+				draw_rect(Rect2(-shell_size.x * 0.5, -shell_size.y * 0.5, shell_size.x, shell_size.y), Color(effect_color, minf(1.0, life / 8.0)), true)
+				if shell_variant == 1:
+					draw_line(Vector2(-shell_size.x * 0.35, -1.0), Vector2(shell_size.x * 0.35, -1.0), Color(1.0, 0.97, 0.8, minf(1.0, life / 8.0)), 1.0)
 				draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 			"weapon_empty":
 				draw_string(font, effect_position + Vector2(-120, -0.6 * (30 - life)), "%s EMPTY · DEFAULT RESTORED" % effect["label"], HORIZONTAL_ALIGNMENT_CENTER, 240, 13, Color(effect_color, life / 30.0))

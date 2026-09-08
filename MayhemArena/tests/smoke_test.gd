@@ -27,6 +27,7 @@ func _init() -> void:
 	expect(MapCatalog.scene_layer_for("scene1", 0) != null, "map 1 animated background layer must be available")
 	expect(MapCatalog.scene_layer_for("scene2", 0) != null, "map 1 animated decoration layer must be available")
 	expect(MapCatalog.scene_layer_for("scene3", 0) != null, "map 1 animated platform layer must be available")
+	expect(GameScript.MenuScreen.PLAYER_MODAL != GameScript.MenuScreen.MAIN, "menu screen enum must retain the player modal state")
 	for map_id in range(1, 11):
 		var map_texture := MapCatalog.texture_for(map_id)
 		expect(map_texture.get_width() == 1000 and map_texture.get_height() == 560, "map %d must retain the original 1000 x 560 stage" % map_id)
@@ -145,6 +146,24 @@ func _init() -> void:
 	shell_game.update_effect(0)
 	expect(Vector2(shell_game.effects[0]["position"]).y < shell_start.y, "ejected shells must initially travel upward")
 	shell_game.free()
+
+	var menu := GameScript.new()
+	expect(menu.menu_screen == GameScript.MenuScreen.MAIN, "a new game must open on the main menu")
+	menu.process_menu_click(Vector2(750, 320))
+	expect(menu.menu_screen == GameScript.MenuScreen.CUSTOM_MODE, "main menu custom game click must open mode selection")
+	menu.process_menu_click(Vector2(100, 160))
+	expect(menu.menu_screen == GameScript.MenuScreen.MAP_SELECTION, "free for all click must open map selection")
+	menu.process_menu_click(Vector2(500, 515))
+	expect(menu.menu_screen == GameScript.MenuScreen.PLAYER_SETUP, "map continue click must open player setup")
+	menu.process_menu_click(Vector2(120, 400))
+	expect(menu.menu_screen == GameScript.MenuScreen.PLAYER_MODAL and menu.player_modal_kind == 1, "player setup gun click must open the weapon modal")
+	menu.process_menu_click(Vector2(740, 470))
+	expect(menu.menu_screen == GameScript.MenuScreen.PLAYER_SETUP, "weapon modal back click must return to player setup")
+	menu.process_menu_click(Vector2(190, 400))
+	expect(menu.menu_screen == GameScript.MenuScreen.PLAYER_MODAL and menu.player_modal_kind == 2, "player setup perk click must open the perk modal")
+	menu.process_menu_click(Vector2(10, 10))
+	expect(menu.menu_screen == GameScript.MenuScreen.PLAYER_SETUP, "blank modal click must safely close the modal")
+	menu.free()
 
 	if failures.is_empty():
 		print("SMOKE TEST PASSED: 35 Hz, ten maps, five defaults, six Redux perks, action/reload/audio timelines, shell ejection, death/stun/landing/crate effects, thirteen crate weapons, health easing, and pickup verified")

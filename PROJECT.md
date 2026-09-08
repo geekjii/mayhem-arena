@@ -2,7 +2,7 @@
 
 > 项目代号：Mayhem Arena
 > 文档版本：1.2
-> 当前阶段：第二阶段——对局前菜单稳定化；核心源码、自动测试和 Web 中文页面验证通过。手柄/输入重绑定与 macOS、Windows 测试包导出按当前计划暂缓。
+> 当前阶段：第二阶段——对局前菜单稳定化；核心源码、菜单路径自动测试和 Web 中文页面/对局验证通过。手柄/输入重绑定与 macOS、Windows 测试包导出按当前计划暂缓。
 > 实时总进度、当前阻塞和下一对话交接统一记录在 [`STATUS.md`](STATUS.md)。
 
 ## 0. 实时状态入口
@@ -66,7 +66,7 @@
 
 - 一个主菜单。
 - 一个双人本地对战模式。
-- 十张按原版舞台对齐的本地视觉验证地图，可在开局前切换。
+- 十张按原版舞台对齐的本地视觉验证地图，可在开局前切换；桌面研究版第一张地图使用原始动态层，Web 端使用兼容静态底图。
 - 两名使用原版分层结构导出并以蓝、红主色区分的验证角色。
 - 左右移动、跳跃、二段跳和从单向平台下落。
 - 原版五把默认武器：Sand Hawk、Dual Cool Pistols、Angry Cow、Bling Pistol、Katana。
@@ -91,7 +91,7 @@
                   └─ Perk → Perks 弹窗
 ```
 
-当前菜单框架已使用本地逆向地图贴图和玩家/武器组合贴图。四个玩家卡片、AI 标记、帽子/衣服/脸部接口、颜色/Gun/Perk 入口均已预留；Primary Weapon 和 Perks 弹窗支持鼠标点击、键盘浏览与返回。
+当前菜单框架已使用本地逆向地图贴图和玩家/武器组合贴图。四个玩家卡片、AI 标记、帽子/衣服/脸部接口、颜色/Gun/Perk 入口均已预留；Primary Weapon 和 Perks 弹窗支持鼠标点击、方向键/左右键浏览与返回，点击空白处也会安全返回玩家设置。最终 Web 已人工走通菜单到对局及 Esc 返回。
 
 六个原版 Perks 已接入战斗系统：No Perk、Triple Jump、No Recoil、Extra Ammo、Random Weapon at Spawn、Infinite Primary Weapon Ammo。Extra Ammo 按原版规则将可用弹药容量乘以 1.33 后取整；Random Weapon at Spawn 当前从完整的 13 把箱内武器池中随机选择。
 

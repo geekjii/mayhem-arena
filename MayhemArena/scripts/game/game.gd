@@ -436,12 +436,12 @@ func process_player_setup_input() -> void:
 
 func process_player_modal_input() -> void:
 	var interacted := false
-	if Input.is_action_just_pressed("p1_jump"):
-		player_modal_cursor = maxi(0, player_modal_cursor - 1)
+	var item_count := 5 if player_modal_kind == 1 else 6
+	if Input.is_action_just_pressed("p1_jump") or Input.is_action_just_pressed("p1_left"):
+		player_modal_cursor = wrapi(player_modal_cursor - 1, 0, item_count)
 		interacted = true
-	if Input.is_action_just_pressed("p1_down"):
-		var item_count := 5 if player_modal_kind == 1 else 6
-		player_modal_cursor = mini(item_count - 1, player_modal_cursor + 1)
+	if Input.is_action_just_pressed("p1_down") or Input.is_action_just_pressed("p1_right"):
+		player_modal_cursor = wrapi(player_modal_cursor + 1, 0, item_count)
 		interacted = true
 	if Input.is_action_just_pressed("p1_primary"):
 		select_player_modal_item()
@@ -1342,6 +1342,17 @@ func draw_map_scene() -> void:
 	if not round_started or selected_map != 1:
 		draw_texture(map_texture, Vector2.ZERO)
 		return
+	# The original extracted movie layers use transparent cut-outs that render
+	# as a white canvas in the current Godot Web renderer. Keep the animated
+	# layers active for the desktop research build, while using the verified
+	# static map art as a Web-safe fallback until those layers are precomposed.
+	if OS.has_feature("web"):
+		draw_texture(map_texture, Vector2.ZERO)
+		return
+	# Keep the verified 1000x560 map art as the opaque base. The extracted
+	# movie clips contain transparent cut-outs and are decoration/platform
+	# overlays; using them as the only base can expose the exporter matte.
+	draw_texture(map_texture, Vector2.ZERO)
 	var frame := map_animation_frame
 	var background := MapCatalog.scene_layer_for("scene1", frame)
 	var decorations := MapCatalog.scene_layer_for("scene2", frame)

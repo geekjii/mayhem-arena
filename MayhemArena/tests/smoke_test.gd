@@ -24,6 +24,9 @@ func _init() -> void:
 	expect(WeaponCatalog.CRATE_WEAPON_IDS.size() == 13, "the complete crate weapon pool must contain thirteen weapons")
 	expect(WeaponCatalog.WEAPONS.size() == 18, "the catalog must contain five default and thirteen crate weapons")
 	expect(MapCatalog.MAP_TEXTURES.size() == 10, "all ten Redux map art frames must be available")
+	expect(MapCatalog.scene_layer_for("scene1", 0) != null, "map 1 animated background layer must be available")
+	expect(MapCatalog.scene_layer_for("scene2", 0) != null, "map 1 animated decoration layer must be available")
+	expect(MapCatalog.scene_layer_for("scene3", 0) != null, "map 1 animated platform layer must be available")
 	for map_id in range(1, 11):
 		var map_texture := MapCatalog.texture_for(map_id)
 		expect(map_texture.get_width() == 1000 and map_texture.get_height() == 560, "map %d must retain the original 1000 x 560 stage" % map_id)

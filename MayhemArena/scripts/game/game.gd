@@ -1336,7 +1336,10 @@ func draw_map_selection(font: Font) -> void:
 	draw_string(font, Vector2(30, 550), menu_text("↑ ↓ SELECT MAP    Z CONTINUE    X / ESC BACK", "↑ ↓ 选择地图    Z 继续    X / ESC 返回"), HORIZONTAL_ALIGNMENT_LEFT, 760, 12, Color("e6e6e6"))
 
 func draw_map_scene() -> void:
-	if not round_started:
+	# The extracted scene1/2/3 movie clips are the animated composition for
+	# Redux map 1. Other maps have their own static art/collision layouts; do
+	# not overlay map 1's platform layer onto them.
+	if not round_started or selected_map != 1:
 		draw_texture(map_texture, Vector2.ZERO)
 		return
 	var frame := map_animation_frame

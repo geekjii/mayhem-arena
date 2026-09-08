@@ -98,7 +98,6 @@ const DeathWaveTextures := [
 var selected_map := 1
 var map_texture: Texture2D = MapCatalog.texture_for(1)
 var platforms: Array[Rect2] = MapCatalog.platforms_for(1)
-var map_animation_frame := 0
 var players: Array[Node] = []
 var huds: Array[Node] = []
 var match_over := false
@@ -106,6 +105,7 @@ var round_started := false
 var input_lock_frames := 0
 var winner_text := ""
 var effects: Array[Dictionary] = []
+var optional_texture_cache: Dictionary = {}
 var selected_weapons := [1, 3, 1, 1]
 var players_ready := [false, false]
 var player_slot_perks := [0, 1, 2, 3]
@@ -192,8 +192,6 @@ func _physics_process(_delta: float) -> void:
 		process_selection_input()
 		queue_redraw()
 		return
-	map_animation_frame = wrapi(map_animation_frame + 1, 0, 10)
-
 	if Input.is_action_just_pressed("back_to_menu"):
 		enter_selection_screen()
 		return
@@ -678,7 +676,6 @@ func start_round() -> void:
 	effects.clear()
 	clear_weapon_crate()
 	crate_spawn_frames = 105
-	map_animation_frame = 0
 	for index in players.size():
 		players[index].set_perk(player_slot_perks[index])
 		players[index].set_weapon(selected_weapons[index])
@@ -1180,13 +1177,22 @@ func _draw() -> void:
 			"projectile_trail":
 				draw_circle(effect_position, 1.5 + life * 0.18, Color(effect_color, life / 16.0))
 			"shell":
-				draw_set_transform(effect_position, float(effect["rotation"]), Vector2.ONE)
 				var shell_variant := int(effect.get("variant", 0))
-				var shell_size := Vector2(8.0, 4.0) if shell_variant == 1 else Vector2(6.0, 3.0)
-				draw_rect(Rect2(-shell_size.x * 0.5, -shell_size.y * 0.5, shell_size.x, shell_size.y), Color(effect_color, minf(1.0, life / 8.0)), true)
-				if shell_variant == 1:
-					draw_line(Vector2(-shell_size.x * 0.35, -1.0), Vector2(shell_size.x * 0.35, -1.0), Color(1.0, 0.97, 0.8, minf(1.0, life / 8.0)), 1.0)
-				draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+				var shell_path := "res://assets/original_reference/effects/shell2/1.png" if shell_variant == 1 else "res://assets/original_reference/effects/shell/1.png"
+				var shell_texture := optional_texture(shell_path)
+				var shell_alpha := minf(1.0, life / 8.0)
+				if shell_texture != null:
+					# The original fx_shell symbols are 130% x 120% cases. The
+					# exported pixels are downscaled once to match the gameplay scale.
+					draw_centered_texture(shell_texture, effect_position, 0.65, float(effect["rotation"]), Color(1.0, 1.0, 1.0, shell_alpha))
+				else:
+					# Compatibility fallback for a build without imported FFDec assets.
+					draw_set_transform(effect_position, float(effect["rotation"]), Vector2.ONE)
+					var shell_size := Vector2(8.0, 4.0) if shell_variant == 1 else Vector2(6.0, 3.0)
+					draw_rect(Rect2(-shell_size.x * 0.5, -shell_size.y * 0.5, shell_size.x, shell_size.y), Color(effect_color, shell_alpha), true)
+					if shell_variant == 1:
+						draw_line(Vector2(-shell_size.x * 0.35, -1.0), Vector2(shell_size.x * 0.35, -1.0), Color(1.0, 0.97, 0.8, shell_alpha), 1.0)
+					draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 			"weapon_empty":
 				draw_string(font, effect_position + Vector2(-120, -0.6 * (30 - life)), "%s EMPTY · DEFAULT RESTORED" % effect["label"], HORIZONTAL_ALIGNMENT_CENTER, 240, 13, Color(effect_color, life / 30.0))
 
@@ -1200,6 +1206,13 @@ func draw_centered_texture(texture: Texture2D, at_position: Vector2, scale_value
 	draw_set_transform(at_position, rotation_value, Vector2.ONE * scale_value)
 	draw_texture(texture, -Vector2(texture.get_size()) * 0.5, modulate)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+func optional_texture(path: String) -> Texture2D:
+	if optional_texture_cache.has(path):
+		return optional_texture_cache[path] as Texture2D
+	var texture := ResourceLoader.load(path) as Texture2D
+	optional_texture_cache[path] = texture
+	return texture
 
 func menu_text(english: String, chinese: String) -> String:
 	return chinese if use_chinese else english
@@ -1394,10 +1407,9 @@ func draw_map_selection(font: Font) -> void:
 	draw_string(font, Vector2(30, 550), menu_text("↑ ↓ SELECT MAP    Z CONTINUE    X / ESC BACK", "↑ ↓ 选择地图    Z 继续    X / ESC 返回"), HORIZONTAL_ALIGNMENT_LEFT, 760, 12, Color("e6e6e6"))
 
 func draw_map_scene() -> void:
-	# The extracted scene1/2/3 movie clips are the animated composition for
-	# Redux map 1. Other maps have their own static art/collision layouts; do
-	# not overlay map 1's platform layer onto them.
-	if not round_started or selected_map != 1:
+	# scene1/2/3 frame N is the complete three-layer art for map N in the
+	# original controller. It is not a ten-frame animation of map 1.
+	if not round_started:
 		draw_texture(map_texture, Vector2.ZERO)
 		return
 	# The original extracted movie layers use transparent cut-outs that render
@@ -1411,10 +1423,9 @@ func draw_map_scene() -> void:
 	# movie clips contain transparent cut-outs and are decoration/platform
 	# overlays; using them as the only base can expose the exporter matte.
 	draw_texture(map_texture, Vector2.ZERO)
-	var frame := map_animation_frame
-	var background := MapCatalog.scene_layer_for("scene1", frame)
-	var decorations := MapCatalog.scene_layer_for("scene2", frame)
-	var platforms_layer := MapCatalog.scene_layer_for("scene3", frame)
+	var background := MapCatalog.scene_layer_for("scene1", selected_map)
+	var decorations := MapCatalog.scene_layer_for("scene2", selected_map)
+	var platforms_layer := MapCatalog.scene_layer_for("scene3", selected_map)
 	if background == null or decorations == null or platforms_layer == null:
 		draw_texture(map_texture, Vector2.ZERO)
 		return

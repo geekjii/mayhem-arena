@@ -15,10 +15,10 @@ const MAP_TEXTURES := {
 	10: preload("res://assets/original_reference/maps/redux_map_10.png"),
 }
 
-# The painted stage is a three-layer movie clip in the original SWF. The
-# existing redux_map_## images remain the stable menu preview, while gameplay
-# composites these source layers so the original ten-frame background motion is
-# visible without changing collision coordinates.
+# The painted stage is a three-layer movie clip in the original SWF. Its ten
+# timeline frames are map ids 1..10 (selected by gotoAndStop(mapnumber)), not
+# animation frames for a single map. The existing redux_map_## images remain
+# the stable opaque base, while gameplay composites the matching source layers.
 const SCENE_LAYER_PATHS := {
 	"scene1": "res://assets/original_reference/map_layers/scene1/%d.png",
 	"scene2": "res://assets/original_reference/map_layers/scene2/%d.png",
@@ -117,12 +117,12 @@ const SPAWN_SETS := {
 static func texture_for(map_id: int) -> Texture2D:
 	return MAP_TEXTURES.get(map_id, MAP_TEXTURES[1])
 
-static func scene_layer_for(layer_name: String, frame: int) -> Texture2D:
+static func scene_layer_for(layer_name: String, map_id: int) -> Texture2D:
 	var path_template: String = SCENE_LAYER_PATHS.get(layer_name, "")
 	if path_template.is_empty():
 		return null
-	var normalized_frame := posmod(frame, 10) + 1
-	return ResourceLoader.load(path_template % normalized_frame) as Texture2D
+	var normalized_map_id := clampi(map_id, 1, 10)
+	return ResourceLoader.load(path_template % normalized_map_id) as Texture2D
 
 static func scene_layer_origin(layer_name: String) -> Vector2:
 	return SCENE_LAYER_ORIGINS.get(layer_name, Vector2.ZERO)

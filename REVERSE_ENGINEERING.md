@@ -163,9 +163,9 @@ https://sxiao.4399.com/4399swf/upload_swf/ftp14/wangc/20141217/1.swf
 - 武器箱拾取的 `fx_crateopen` / `fx_crateopen2`（符号 18 / 20）已按 4+2 数量和原始抛射参数接入；`fx_ex_wavesmall`（符号 111）的 15 帧画面及趋近 400% 的缩放公式也已接入。
 
 `PLAYER_FULL` 中没有独立的普通受击角色时间轴；原作普通受击主要依靠击退、HUD 震动、短暂停顿和状态粒子表达。
-当前尚未接入默认武器和箱内武器的完整原始换弹画面、枪口火焰与弹壳原始贴图，也未接入十张地图选择帧内部影片剪辑的动态装饰；13 把箱内武器的战斗逻辑已接入，视觉先使用本地验证用程序化效果。
+默认武器换弹控制器的关键区间和声音节点已接入；本轮又用 FFDec 递归导出了 `fx_muzzleflash`、`fx_shell`、`fx_shell2` 的父级透明 PNG，并在运行时优先使用原图，资源未导入时回退程序化绘制。13 把箱内武器仍按 `PLAYER_FULL` 父级时间轴显示动作帧，箱内武器耗尽后遵循原规则回到默认武器，不新增换弹。
 
-地图时间轴需要区分“地图选择帧”和“内部动画帧”：`DefineSprite_1190_EVERYTHING/frame_1/DoAction.as` 明确调用 `scene1.gotoAndStop(mapnumber)`、`scene2.gotoAndStop(mapnumber)`、`scene3.gotoAndStop(mapnumber)`，因此三层的顶层 1–10 帧对应地图编号，不能按 35 Hz 循环当作地图 1 的动画。真正动态装饰应从每个选中帧内部的嵌套 MovieClip 继续递归追踪、导出和播放。当前第一张地图的三层循环合成只是提取试验，后续接入前必须先修正该基线。
+地图时间轴需要区分“地图选择帧”和“内部动画帧”：`DefineSprite_1190_EVERYTHING/frame_1/DoAction.as` 明确调用 `scene1.gotoAndStop(mapnumber)`、`scene2.gotoAndStop(mapnumber)`、`scene3.gotoAndStop(mapnumber)`，因此三层的顶层 1–10 帧对应地图编号，不能按 35 Hz 循环当作地图 1 的动画。本轮对十张地图的选中帧做了递归扫描，没有发现额外的多帧嵌套 MovieClip；Godot 已改为固定取 `selected_map` 对应的三层，不再发生跨地图混帧。若后续新增独立装饰素材，再按单图导出和接入。
 本轮已补上与开火动作同步的程序化弹壳抛出、独立的短时弹道和换弹时中断上一段攻击时间轴；这些是接入原始贴图前的本地验证反馈，不作为公开分发美术资源。
 同时已补上重生后 35 个逻辑帧的伤害保护、受击闪红反馈，以及换弹期间的攻击画面清理；当前研究版的核心对局反馈已闭环。
 
@@ -224,7 +224,7 @@ Godot 当前已按截图建立对应的菜单骨架：主菜单 → Custom Game 
 
 原包体中的 13 把箱内控制器均已迁移为可玩的主/副攻击，并按各自原控制器长度驱动父级合成动作。SWFTools 用于确认控制器符号编号和帧数；FFDec 用于把武器递归注入 `PLAYER_FULL`（1167）的 `hand1`，并连同嵌套 Shape/MovieClip 逐帧栅格化。最终得到 13 套、共 834 帧透明合成图，统一写入本地 `player_layers/composite/<weapon>/<frame>.png`。AK 主攻击映射 1–32 帧、枪托特殊攻击映射 45–68 帧；其余武器也按脚本中的动作标签和结束帧设置对应主/副攻击区间。直接导出的武器控制器结果仍保留用于符号编号和帧数交叉核对。
 
-战斗反馈触发点也已按原脚本对齐：`fx_muzzleflash` 用于枪口火焰，`fx_shell` / `fx_shell2` 区分普通与大号弹壳，`fx_shrapnel` 用于散射/命中碎片，`fx_text` / `fx_textbig` 用于 `POW`、`BOOM!`、`KABOOM!`、`SNIPED`、`SHANKED` 等战斗文字。当前公开工程使用程序化绘制这些效果，原始效果 PNG 仍受本地研究资源边界约束。
+战斗反馈触发点也已按原脚本对齐：`fx_muzzleflash` 用于枪口火焰，`fx_shell` / `fx_shell2` 区分普通与大号弹壳，`fx_shrapnel` 用于散射/命中碎片，`fx_text` / `fx_textbig` 用于 `POW`、`BOOM!`、`KABOOM!`、`SNIPED`、`SHANKED` 等战斗文字。当前本机研究版已优先绘制递归导出的枪口/弹壳 PNG，缺资源时仍使用程序化兼容层；命中/爆炸的其余贴图继续沿用现有验证层。
 
 菜单收尾还加入了 `Controls & Settings` 页面：默认英语，可用鼠标或 `Z` / 方向键切换到中文；地图、玩家设置、武器/Perks 弹窗和预留页面均保留 `X` / `Esc` 返回提示，鼠标靠近可交互区域会显示高亮描边。中文文本以有效 UTF-8 写入，并已通过项目内 Source Han Sans CN Heavy 统一字体入口在桌面/Web 验证；这属于 Godot 复刻层实现，不是原包素材结论。
 

@@ -24,9 +24,13 @@ func _init() -> void:
 	expect(WeaponCatalog.CRATE_WEAPON_IDS.size() == 13, "the complete crate weapon pool must contain thirteen weapons")
 	expect(WeaponCatalog.WEAPONS.size() == 18, "the catalog must contain five default and thirteen crate weapons")
 	expect(MapCatalog.MAP_TEXTURES.size() == 10, "all ten Redux map art frames must be available")
-	expect(MapCatalog.scene_layer_for("scene1", 0) != null, "map 1 animated background layer must be available")
-	expect(MapCatalog.scene_layer_for("scene2", 0) != null, "map 1 animated decoration layer must be available")
-	expect(MapCatalog.scene_layer_for("scene3", 0) != null, "map 1 animated platform layer must be available")
+	for map_id in range(1, 11):
+		expect(MapCatalog.scene_layer_for("scene1", map_id) != null, "map %d scene1 layer must be available" % map_id)
+		expect(MapCatalog.scene_layer_for("scene2", map_id) != null, "map %d scene2 layer must be available" % map_id)
+		expect(MapCatalog.scene_layer_for("scene3", map_id) != null, "map %d scene3 layer must be available" % map_id)
+	expect(ResourceLoader.load("res://assets/original_reference/effects/muzzle/1.png") != null, "recursive muzzle flash export must be available")
+	expect(ResourceLoader.load("res://assets/original_reference/effects/shell/1.png") != null, "recursive shell export must be available")
+	expect(ResourceLoader.load("res://assets/original_reference/effects/shell2/1.png") != null, "recursive shell2 export must be available")
 	expect(GameScript.MenuScreen.PLAYER_MODAL != GameScript.MenuScreen.MAIN, "menu screen enum must retain the player modal state")
 	for map_id in range(1, 11):
 		var map_texture := MapCatalog.texture_for(map_id)

@@ -18,6 +18,7 @@ const P2_WEAPON_TEXTURES := {
 }
 const P1_BASE_TEXTURE = preload("res://assets/original_reference/player_layers/base/p1.png")
 const P2_BASE_TEXTURE = preload("res://assets/original_reference/player_layers/base/p2.png")
+const ORIGINAL_MUZZLE_FLASH_PATH := "res://assets/original_reference/effects/muzzle/1.png"
 
 const WEAPON_VISUAL_NAMES := {
 	1: "deagle",
@@ -144,6 +145,7 @@ var visual_frame_end := 0
 var visual_action_active := false
 var visual_frame_cache: Dictionary = {}
 var transparent_texture_cache: Dictionary = {}
+var original_muzzle_flash_texture: Texture2D
 var walk_phase := 0.0
 var body_visual_y := 0.0
 var hand_visual_y := 0.0
@@ -866,6 +868,20 @@ func draw_pickup_weapon() -> void:
 func draw_muzzle_flash() -> void:
 	var muzzle := muzzle_position() - position
 	var alpha := float(muzzle_flash_frames) / 3.0
+	if original_muzzle_flash_texture == null:
+		original_muzzle_flash_texture = ResourceLoader.load(ORIGINAL_MUZZLE_FLASH_PATH) as Texture2D
+	if original_muzzle_flash_texture != null:
+		# FFDec's recursive export preserves the SWF registration point at about
+		# (142, 181.5) in the 429x394 parent canvas. Draw from that point so the
+		# flash follows the muzzle and mirrors around the same origin as the gun.
+		var source_registration := Vector2(142.0, 181.5)
+		var export_scale := 0.10 * (1.35 if visual_action == "secondary" else 1.0)
+		draw_set_transform(muzzle, 0.0, Vector2(float(facing) * export_scale, export_scale))
+		draw_texture(original_muzzle_flash_texture, -source_registration, Color(1.0, 1.0, 1.0, alpha))
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+		return
+	# Compatibility fallback for builds where the optional FFDec export has not
+	# been imported yet. Keep the procedural effect functional in that case.
 	var secondary_scale := 1.35 if visual_action == "secondary" else 1.0
 	var weapon_scale := 1.35 if weapon_id in [6, 8, 12, 18] else (0.82 if weapon_id in [13, 14, 15] else 1.0)
 	var length := (10.0 + float(muzzle_flash_frames) * 3.0) * secondary_scale * weapon_scale

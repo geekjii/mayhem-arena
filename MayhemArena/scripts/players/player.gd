@@ -25,7 +25,19 @@ const WEAPON_VISUAL_NAMES := {
 	3: "revolver",
 	4: "bling",
 	5: "katana",
+	6: "shotgun",
+	7: "m4",
+	8: "homing",
 	9: "ak",
+	10: "bat",
+	11: "bow",
+	12: "sniper",
+	13: "mp5k",
+	14: "uzi",
+	15: "mini",
+	16: "umbrella",
+	17: "knife",
+	18: "bomb",
 }
 const WEAPON_VISUAL_RANGES := {
 	1: {"primary": Vector2i(1, 11), "secondary": Vector2i(97, 126)},
@@ -33,7 +45,19 @@ const WEAPON_VISUAL_RANGES := {
 	3: {"primary": Vector2i(1, 16), "secondary": Vector2i(116, 141)},
 	4: {"primary": Vector2i(1, 9), "secondary": Vector2i(97, 127)},
 	5: {"primary": Vector2i(1, 25), "secondary": Vector2i(30, 49)},
+	6: {"primary": Vector2i(1, 41), "secondary": Vector2i(70, 78)},
+	7: {"primary": Vector2i(1, 32), "secondary": Vector2i(50, 79)},
+	8: {"primary": Vector2i(1, 39), "secondary": Vector2i(60, 61)},
 	9: {"primary": Vector2i(1, 32), "secondary": Vector2i(45, 68)},
+	10: {"primary": Vector2i(1, 30), "secondary": Vector2i(42, 76)},
+	11: {"primary": Vector2i(1, 21), "secondary": Vector2i(31, 51)},
+	12: {"primary": Vector2i(1, 53), "secondary": Vector2i(74, 94)},
+	13: {"primary": Vector2i(1, 32), "secondary": Vector2i(50, 65)},
+	14: {"primary": Vector2i(1, 32), "secondary": Vector2i(50, 51)},
+	15: {"primary": Vector2i(1, 24), "secondary": Vector2i(2, 75)},
+	16: {"primary": Vector2i(1, 22), "secondary": Vector2i(35, 46)},
+	17: {"primary": Vector2i(1, 15), "secondary": Vector2i(20, 42)},
+	18: {"primary": Vector2i(1, 20), "secondary": Vector2i(25, 48)},
 }
 # Original default-weapon reload sections inside each controller timeline.
 const WEAPON_RELOAD_RANGES := {
@@ -50,9 +74,24 @@ const WEAPON_RAW_NAMES := {
 	5: "katana",
 	9: "ak",
 }
-const CRATE_ANIMATION_LENGTHS := {
-	6: 41, 7: 50, 8: 60, 9: 68, 10: 30, 11: 38, 12: 22,
-	13: 50, 14: 50, 15: 46, 16: 42, 17: 30, 18: 32,
+const CRATE_COMPOSITE_NAMES := {
+	6: "shotgun",
+	7: "m4",
+	8: "homing",
+	9: "ak",
+	10: "bat",
+	11: "bow",
+	12: "sniper",
+	13: "mp5k",
+	14: "uzi",
+	15: "mini",
+	16: "umbrella",
+	17: "knife",
+	18: "bomb",
+}
+const CRATE_CONTROLLER_LENGTHS := {
+	6: 78, 7: 79, 8: 61, 9: 68, 10: 76, 11: 51, 12: 94,
+	13: 65, 14: 51, 15: 75, 16: 46, 17: 42, 18: 48,
 }
 const WEAPON_CANVAS_ORIGINS := {
 	1: Vector2(-33.0, -49.0),
@@ -624,7 +663,7 @@ func start_weapon_visual(action: String) -> void:
 	if not WEAPON_VISUAL_RANGES.has(weapon_id):
 		visual_action = action
 		visual_frame = 1
-		visual_frame_end = int(CRATE_ANIMATION_LENGTHS.get(weapon_id, 12))
+		visual_frame_end = int(CRATE_CONTROLLER_LENGTHS.get(weapon_id, 12))
 		visual_action_active = true
 		notify_weapon_visual_frame()
 		return
@@ -656,20 +695,25 @@ func load_and_cache_weapon_frame(requested_weapon_id: int, action: String, frame
 	var cache_key := "%d:%s:%d" % [requested_weapon_id, action, frame]
 	if visual_frame_cache.has(cache_key):
 		return visual_frame_cache[cache_key]
-	var weapon_name: String = WEAPON_RAW_NAMES[requested_weapon_id]
+	var weapon_name: String = WEAPON_RAW_NAMES.get(requested_weapon_id, "")
 	var path: String
-	if requested_weapon_id == 9:
-		# The reverse-engineered AK controller exports one shared 68-frame
-		# weapon layer; its primary and stock-strike ranges are selected above.
-		path = "res://assets/original_reference/player_layers/raw/%s/%d.png" % [weapon_name, frame]
+	if CRATE_COMPOSITE_NAMES.has(requested_weapon_id):
+		# The parent PLAYER_FULL export includes the hand, body and nested weapon
+		# dependencies. These frames are normalized around the feet anchor and
+		# intentionally bypass the player-colour matte cleanup below.
+		weapon_name = CRATE_COMPOSITE_NAMES[requested_weapon_id]
+		path = "res://assets/original_reference/player_layers/composite/%s/%d.png" % [weapon_name, frame]
 	elif action == "reload":
 		path = "res://assets/original_reference/player_layers/raw/%s/%d.png" % [weapon_name, frame]
 	else:
 		path = "res://assets/original_reference/player_layers/weapons/%s/%s/%d.png" % [weapon_name, action, frame]
 	var texture := ResourceLoader.load(path) as Texture2D
 	if texture != null:
-		visual_frame_cache[cache_key] = transparent_texture(texture)
-	return texture
+		if CRATE_COMPOSITE_NAMES.has(requested_weapon_id):
+			visual_frame_cache[cache_key] = recolor_composite_player(texture)
+		else:
+			visual_frame_cache[cache_key] = transparent_texture(texture)
+	return visual_frame_cache.get(cache_key, texture)
 
 func weapon_frame_texture() -> Texture2D:
 	if not visual_action_active or not WEAPON_VISUAL_NAMES.has(weapon_id):
@@ -685,7 +729,10 @@ func _draw() -> void:
 	draw_ellipse_shadow()
 	var animated_weapon := weapon_frame_texture()
 	if animated_weapon != null:
-		draw_layered_player(animated_weapon)
+		if CRATE_COMPOSITE_NAMES.has(weapon_id):
+			draw_composite_player(animated_weapon)
+		else:
+			draw_layered_player(animated_weapon)
 	elif weapon_id >= 6:
 		draw_pickup_player()
 	else:
@@ -726,6 +773,36 @@ func draw_layered_player(animated_weapon: Texture2D) -> void:
 	var weapon_position: Vector2 = WEAPON_CANVAS_ORIGINS[weapon_id] + Vector2(-float(weapon_kick_frames) * 0.45, hand_visual_y)
 	draw_texture_rect(animated_weapon, Rect2(weapon_position, weapon_size), false, modulate)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+func draw_composite_player(animated_player: Texture2D) -> void:
+	# Composite exports are 2x rasterized and use a 220x180 source canvas. The
+	# extraction step keeps the feet at y=160, so half-scale places them on the
+	# same origin as the existing 25x38 player layers.
+	var modulate := visual_modulate()
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2(facing, 1.0))
+	var size := Vector2(animated_player.get_width(), animated_player.get_height()) * 0.5
+	draw_texture_rect(animated_player, Rect2(Vector2(-size.x * 0.5, -80.0 + body_visual_y), size), false, modulate)
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+func recolor_composite_player(texture: Texture2D) -> Texture2D:
+	# The reference parent export uses the P1 blue body. Recolour only the
+	# normalized body window so blue weapon parts and black outlines stay intact.
+	# Alpha is preserved, including the anti-aliased edge pixels.
+	if player_color == Color("0099ff"):
+		return texture
+	var image := texture.get_image()
+	var min_x := 84
+	var max_x := mini(image.get_width(), 136)
+	var min_y := 80
+	var max_y := mini(image.get_height(), 166)
+	for y in range(min_y, max_y):
+		for x in range(min_x, max_x):
+			var pixel := image.get_pixel(x, y)
+			if pixel.a < 0.05 or pixel.b < 0.32 or pixel.b <= pixel.r * 1.3 or pixel.b <= pixel.g * 1.05:
+				continue
+			var shade := clampf(pixel.b, 0.35, 1.0)
+			image.set_pixel(x, y, Color(player_color.r * shade, player_color.g * shade, player_color.b * shade, pixel.a))
+	return ImageTexture.create_from_image(image)
 
 func visual_modulate() -> Color:
 	var modulate := Color.WHITE

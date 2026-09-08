@@ -104,22 +104,52 @@ func _init() -> void:
 	player.equip_weapon(9, false)
 	player.start_weapon_visual("primary")
 	expect(player.visual_frame == 1 and player.visual_frame_end == 32, "AK primary attack must use the extracted 32-frame timeline")
-	expect(player.weapon_frame_texture() != null, "AK primary attack must load the extracted raw weapon layer")
+	expect(player.weapon_frame_texture() != null, "AK primary attack must load the extracted composite player frame")
 	player.process_visual_animation()
-	expect(player.visual_frame == 2, "AK raw animation must advance one frame per 35 Hz tick")
-	var crate_visual_lengths := {6: 41, 7: 50, 8: 60, 9: 68, 10: 30, 11: 38, 12: 22, 13: 50, 14: 50, 15: 46, 16: 42, 17: 30, 18: 32}
+	expect(player.visual_frame == 2, "AK composite animation must advance one frame per 35 Hz tick")
+	var crate_visual_ranges := {
+		6: {"primary": Vector2i(1, 41), "secondary": Vector2i(70, 78)},
+		7: {"primary": Vector2i(1, 32), "secondary": Vector2i(50, 79)},
+		8: {"primary": Vector2i(1, 39), "secondary": Vector2i(60, 61)},
+		9: {"primary": Vector2i(1, 32), "secondary": Vector2i(45, 68)},
+		10: {"primary": Vector2i(1, 30), "secondary": Vector2i(42, 76)},
+		11: {"primary": Vector2i(1, 21), "secondary": Vector2i(31, 51)},
+		12: {"primary": Vector2i(1, 53), "secondary": Vector2i(74, 94)},
+		13: {"primary": Vector2i(1, 32), "secondary": Vector2i(50, 65)},
+		14: {"primary": Vector2i(1, 32), "secondary": Vector2i(50, 51)},
+		15: {"primary": Vector2i(1, 24), "secondary": Vector2i(2, 75)},
+		16: {"primary": Vector2i(1, 22), "secondary": Vector2i(35, 46)},
+		17: {"primary": Vector2i(1, 15), "secondary": Vector2i(20, 42)},
+		18: {"primary": Vector2i(1, 20), "secondary": Vector2i(25, 48)},
+	}
 	for crate_id in WeaponCatalog.CRATE_WEAPON_IDS:
 		player.equip_weapon(crate_id, false)
 		player.start_weapon_visual("primary")
-		var primary_start := 1 if crate_id != 9 else 1
-		var primary_end := int(crate_visual_lengths[crate_id]) if crate_id != 9 else 32
+		var primary_range: Vector2i = crate_visual_ranges[crate_id]["primary"]
+		var primary_start := primary_range.x
+		var primary_end := primary_range.y
 		expect(player.visual_action_active and player.visual_frame == primary_start and player.visual_frame_end == primary_end, "crate weapon %d primary animation must use its full controller timeline" % crate_id)
+		expect(player.weapon_frame_texture() != null, "crate weapon %d primary frame must load from the composite export" % crate_id)
 		player.process_visual_animation()
 		expect(player.visual_frame == primary_start + 1, "crate weapon %d primary animation must advance one frame per tick" % crate_id)
 		player.start_weapon_visual("secondary")
-		var secondary_start := 1 if crate_id != 9 else 45
-		var secondary_end := int(crate_visual_lengths[crate_id]) if crate_id != 9 else 68
+		var secondary_range: Vector2i = crate_visual_ranges[crate_id]["secondary"]
+		var secondary_start := secondary_range.x
+		var secondary_end := secondary_range.y
 		expect(player.visual_action_active and player.visual_frame == secondary_start and player.visual_frame_end == secondary_end, "crate weapon %d secondary animation must use its full controller timeline" % crate_id)
+		expect(player.weapon_frame_texture() != null, "crate weapon %d secondary frame must load from the composite export" % crate_id)
+	var recolored_crate_player := PlayerScript.new()
+	recolored_crate_player.setup(null, 1, Vector2.ZERO, Color("ff355a"), 6)
+	recolored_crate_player.start_weapon_visual("primary")
+	var recolored_crate_image := recolored_crate_player.weapon_frame_texture().get_image()
+	var red_body_pixels := 0
+	for pixel_y in range(80, 166):
+		for pixel_x in range(84, 136):
+			var body_pixel := recolored_crate_image.get_pixel(pixel_x, pixel_y)
+			if body_pixel.a > 0.5 and body_pixel.r > body_pixel.b * 1.3 and body_pixel.r > body_pixel.g * 1.3:
+				red_body_pixels += 1
+	expect(red_body_pixels > 20, "composite crate frames must recolour the player body for P2")
+	recolored_crate_player.free()
 	player.equip_weapon(1, false)
 	var visual_player := PlayerScript.new()
 	visual_player.setup(null, 0, Vector2.ZERO, Color("0099ff"), 1)

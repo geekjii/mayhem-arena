@@ -149,6 +149,12 @@ var original_muzzle_flash_texture: Texture2D
 var walk_phase := 0.0
 var body_visual_y := 0.0
 var hand_visual_y := 0.0
+var is_ai_controlled := false
+var ai_controls := {
+	"left": false, "right": false, "jump": false, "down": false,
+	"primary": false, "secondary": false,
+	"jump_just": false, "down_just": false,
+}
 
 const MOVE_ACCEL := 0.65
 const FRICTION := 0.91
@@ -171,6 +177,26 @@ func setup(game: Node, index: int, at_position: Vector2, color: Color, starting_
 
 func action_name(suffix: String) -> String:
 	return "p%d_%s" % [player_index + 1, suffix]
+
+func set_ai_controlled(enabled: bool) -> void:
+	is_ai_controlled = enabled
+	ai_controls = {
+		"left": false, "right": false, "jump": false, "down": false,
+		"primary": false, "secondary": false,
+		"jump_just": false, "down_just": false,
+	}
+	primary_was_pressed = false
+	secondary_was_pressed = false
+
+func set_ai_controls(next_controls: Dictionary) -> void:
+	for key in ai_controls:
+		ai_controls[key] = bool(next_controls.get(key, false))
+
+func control_pressed(control: String) -> bool:
+	return bool(ai_controls.get(control, false)) if is_ai_controlled else Input.is_action_pressed(action_name(control))
+
+func control_just_pressed(control: String) -> bool:
+	return bool(ai_controls.get(control + "_just", false)) if is_ai_controlled else Input.is_action_just_pressed(action_name(control))
 
 func weapon_name() -> String:
 	return WeaponCatalog.weapon_name_for(weapon_id)
@@ -273,8 +299,8 @@ func process_visual_animation() -> void:
 func process_movement() -> void:
 	var move_multiplier := 0.2 if stun_frames > 0 else 1.0
 	var jump_multiplier := 0.4 if stun_frames > 0 else 1.0
-	var left := Input.is_action_pressed(action_name("left"))
-	var right := Input.is_action_pressed(action_name("right"))
+	var left := control_pressed("left")
+	var right := control_pressed("right")
 	if right and not left:
 		velocity.x += MOVE_ACCEL * move_multiplier
 		facing = 1
@@ -282,12 +308,12 @@ func process_movement() -> void:
 		velocity.x -= MOVE_ACCEL * move_multiplier
 		facing = -1
 
-	if Input.is_action_just_pressed(action_name("jump")) and jumps_remaining > 0:
+	if control_just_pressed("jump") and jumps_remaining > 0:
 		jumps_remaining -= 1
 		velocity.y = -JUMP_POWER * (1.0 if jumps_remaining == max_jump_count() - 1 else 0.8) * jump_multiplier
 		position.y -= 1.0
 
-	if Input.is_action_just_pressed(action_name("down")) and is_standing_on_platform():
+	if control_just_pressed("down") and is_standing_on_platform():
 		drop_frames = 5
 		velocity.y += 1.0
 		position.y += 2.0
@@ -325,8 +351,8 @@ func is_standing_on_platform() -> bool:
 	return false
 
 func process_weapons() -> void:
-	var primary_pressed := Input.is_action_pressed(action_name("primary"))
-	var secondary_pressed := Input.is_action_pressed(action_name("secondary"))
+	var primary_pressed := control_pressed("primary")
+	var secondary_pressed := control_pressed("secondary")
 	var weapon := WeaponCatalog.get_weapon(weapon_id)
 	var primary: Dictionary = weapon["primary"]
 	var secondary: Dictionary = weapon["secondary"]
@@ -381,7 +407,7 @@ func fire_attack(attack: Dictionary, secondary: bool) -> void:
 		"pellet_burst":
 			apply_weapon_recoil(float(attack["recoil"]))
 			for pellet in int(attack["pellets"]):
-				arena.spawn_bullet(self, muzzle_position(), facing, attack)
+				arena.spawn_bullet(self, muzzle_position(), facing, attack, true)
 			consume_ammo(int(attack.get("ammo_cost", 1)))
 		"bullet_burst":
 			apply_weapon_recoil(float(attack["recoil"]))
@@ -661,6 +687,13 @@ func color_distance(first: Color, second: Color) -> float:
 func base_texture_for_display() -> Texture2D:
 	return transparent_texture(P1_BASE_TEXTURE if player_index == 0 else P2_BASE_TEXTURE)
 
+func portrait_texture() -> Texture2D:
+	if weapon_id >= 6:
+		var composite := load_and_cache_weapon_frame(weapon_id, "primary", 1)
+		if composite != null:
+			return composite
+	return texture_for_weapon(weapon_id)
+
 func start_weapon_visual(action: String) -> void:
 	if not WEAPON_VISUAL_RANGES.has(weapon_id):
 		visual_action = action
@@ -712,7 +745,7 @@ func load_and_cache_weapon_frame(requested_weapon_id: int, action: String, frame
 	var texture := ResourceLoader.load(path) as Texture2D
 	if texture != null:
 		if CRATE_COMPOSITE_NAMES.has(requested_weapon_id):
-			visual_frame_cache[cache_key] = recolor_composite_player(texture)
+			visual_frame_cache[cache_key] = recolor_composite_player(clean_composite_texture(texture))
 		else:
 			visual_frame_cache[cache_key] = transparent_texture(texture)
 	return visual_frame_cache.get(cache_key, texture)
@@ -736,7 +769,11 @@ func _draw() -> void:
 		else:
 			draw_layered_player(animated_weapon)
 	elif weapon_id >= 6:
-		draw_pickup_player()
+		var idle_composite := load_and_cache_weapon_frame(weapon_id, "primary", 1)
+		if idle_composite != null:
+			draw_composite_player(idle_composite)
+		else:
+			draw_pickup_player()
 	else:
 		draw_idle_player()
 	if weapon_id >= 6 and animated_weapon == null:
@@ -804,6 +841,28 @@ func recolor_composite_player(texture: Texture2D) -> Texture2D:
 				continue
 			var shade := clampf(pixel.b, 0.35, 1.0)
 			image.set_pixel(x, y, Color(player_color.r * shade, player_color.g * shade, player_color.b * shade, pixel.a))
+	return ImageTexture.create_from_image(image)
+
+func clean_composite_texture(texture: Texture2D) -> Texture2D:
+	# Parent-timeline exports occasionally retain faint matte pixels. Clean the
+	# alpha edge before recolouring; do not remove the rectangular body/shirt
+	# shapes that are intentional parts of Redux's Flash character design.
+	var image := texture.get_image()
+	if image == null:
+		return texture
+	for y in image.get_height():
+		for x in image.get_width():
+			var pixel := image.get_pixel(x, y)
+			if pixel.a < 0.08:
+				pixel.a = 0.0
+				image.set_pixel(x, y, pixel)
+			# The PLAYER_FULL parent export includes solid palette backing blocks
+			# through the body window. They become conspicuous rectangles after
+			# P2/P3/P4 recolouring, so remove only that saturated export colour.
+			elif x >= 78 and x <= 138 and y >= 88 and y <= 166 and pixel.a > 0.9 and pixel.b > 0.75 and pixel.g > 0.40 and pixel.r < 0.12:
+				pixel.a = 0.0
+				image.set_pixel(x, y, pixel)
+	remove_edge_matte(image)
 	return ImageTexture.create_from_image(image)
 
 func visual_modulate() -> Color:

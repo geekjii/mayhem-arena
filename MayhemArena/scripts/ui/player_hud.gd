@@ -46,7 +46,7 @@ func _draw() -> void:
 	draw_rect(panel, Color("171a1c"), false, 3.0)
 	draw_rect(Rect2(4, 4, 36, 42), Color("d9d9d3"), true)
 	draw_rect(Rect2(4, 4, 36, 42), Color("171a1c"), false, 2.0)
-	var portrait: Texture2D = target.texture_for_weapon(target.weapon_id)
+	var portrait: Texture2D = target.portrait_texture()
 	var portrait_scale := minf(34.0 / portrait.get_width(), 38.0 / portrait.get_height())
 	var portrait_size := Vector2(portrait.get_width(), portrait.get_height()) * portrait_scale
 	draw_texture_rect(portrait, Rect2(Vector2(22, 45) - portrait_size * Vector2(0.5, 1.0), portrait_size), false)

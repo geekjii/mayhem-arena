@@ -138,4 +138,8 @@ static func spawns_for(map_id: int) -> Array[Vector2]:
 	var result: Array[Vector2] = []
 	for spawn in SPAWN_SETS.get(map_id, SPAWN_SETS[1]):
 		result.append(spawn)
+	# Slots three and four enter from above and settle onto the same broad Flash
+	# platform collision used by the original two verified spawn points.
+	result.append(Vector2(400, -80))
+	result.append(Vector2(600, -150))
 	return result

@@ -7,6 +7,7 @@ const HudScript = preload("res://scripts/ui/player_hud.gd")
 const WeaponCatalog = preload("res://scripts/weapons/weapon_catalog.gd")
 const MapCatalog = preload("res://scripts/game/map_catalog.gd")
 const FontCatalog = preload("res://scripts/ui/font_catalog.gd")
+const PlatformGraphScript = preload("res://scripts/ai/platform_graph.gd")
 const StunTexture = preload("res://assets/original_reference/effects/status/stun.png")
 const CrateOpen1Texture = preload("res://assets/original_reference/effects/crate/open1/1.png")
 const CrateOpen2Texture = preload("res://assets/original_reference/effects/crate/open2/1.png")
@@ -107,7 +108,9 @@ var winner_text := ""
 var effects: Array[Dictionary] = []
 var optional_texture_cache: Dictionary = {}
 var selected_weapons := [1, 3, 1, 1]
-var players_ready := [false, false]
+enum SlotType { EMPTY, HUMAN, AI }
+var player_slot_types := [SlotType.HUMAN, SlotType.EMPTY, SlotType.EMPTY, SlotType.AI]
+var players_ready := [false, false, false, false]
 var player_slot_perks := [0, 1, 2, 3]
 var player_slot_colors := [Color("0099ff"), Color("ff355a"), Color("35c759"), Color("ff72c7")]
 var player_slot_names := ["Player 1", "Player 2", "Player 3", "Player 4"]
@@ -127,29 +130,29 @@ var use_chinese := false
 var settings_cursor := 0
 var menu_mouse_position := Vector2(-1000.0, -1000.0)
 var menu_hover_pulse := 0.0
+var match_participant_count := 0
+var ai_previous_jump: Dictionary = {}
+var ai_platform_graph = PlatformGraphScript.new()
 
 func _ready() -> void:
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	configure_input()
 	create_players()
+	ai_platform_graph.rebuild(platforms)
 	enter_selection_screen()
 	queue_redraw()
 
 func create_players() -> void:
-	var definitions := [
-		{"spawn": Vector2(292, 250), "color": Color("0099ff"), "weapon": 1},
-		{"spawn": Vector2(741, 110), "color": Color("ff355a"), "weapon": 3},
-	]
-	for index in definitions.size():
-		var definition: Dictionary = definitions[index]
+	var spawns := MapCatalog.spawns_for(selected_map)
+	for index in 4:
 		var player := PlayerScript.new()
 		add_child(player)
-		player.setup(self, index, definition["spawn"], definition["color"], definition["weapon"])
+		player.setup(self, index, spawns[index], player_slot_colors[index], selected_weapons[index])
 		players.append(player)
 
 		var hud := HudScript.new()
 		add_child(hud)
-		var hud_position := Vector2(70 if index == 0 else 630, 498)
+		var hud_position: Vector2 = [Vector2(15, 8), Vector2(685, 8), Vector2(15, 502), Vector2(685, 502)][index]
 		hud.setup(player, hud_position)
 		player.attach_hud(hud)
 		huds.append(hud)
@@ -160,6 +163,10 @@ func configure_input() -> void:
 		"p1_down": KEY_DOWN, "p1_primary": KEY_Z, "p1_secondary": KEY_X,
 		"p2_left": KEY_A, "p2_right": KEY_D, "p2_jump": KEY_W,
 		"p2_down": KEY_S, "p2_primary": KEY_T, "p2_secondary": KEY_Y,
+		"p3_left": KEY_J, "p3_right": KEY_L, "p3_jump": KEY_I,
+		"p3_down": KEY_K, "p3_primary": KEY_U, "p3_secondary": KEY_O,
+		"p4_left": KEY_F, "p4_right": KEY_H, "p4_jump": KEY_E,
+		"p4_down": KEY_G, "p4_primary": KEY_V, "p4_secondary": KEY_B,
 		"map_previous": KEY_Q, "map_next": KEY_E,
 		"restart": KEY_R, "back_to_menu": KEY_ESCAPE,
 	}
@@ -198,6 +205,7 @@ func _physics_process(_delta: float) -> void:
 	if match_over and Input.is_action_just_pressed("restart"):
 		reset_match()
 	if not match_over:
+		update_ai_controls()
 		process_weapon_crate_spawning()
 
 	for index in range(effects.size() - 1, -1, -1):
@@ -410,43 +418,9 @@ func process_player_setup_input() -> void:
 		enter_map_selection_screen()
 		play_ui_sound()
 		return
-	var interacted := false
-	if not players_ready[0] and not players_ready[1]:
-		if Input.is_action_just_pressed("map_previous"):
-			select_map(-1)
-			interacted = true
-		if Input.is_action_just_pressed("map_next"):
-			select_map(1)
-			interacted = true
-	if not players_ready[0]:
-		if Input.is_action_just_pressed("p1_left"):
-			selected_weapons[0] = wrapi(selected_weapons[0] - 1, 1, 6)
-			interacted = true
-		if Input.is_action_just_pressed("p1_right"):
-			selected_weapons[0] = wrapi(selected_weapons[0] + 1, 1, 6)
-			interacted = true
-	if not players_ready[1]:
-		if Input.is_action_just_pressed("p2_left"):
-			selected_weapons[1] = wrapi(selected_weapons[1] - 1, 1, 6)
-			interacted = true
-		if Input.is_action_just_pressed("p2_right"):
-			selected_weapons[1] = wrapi(selected_weapons[1] + 1, 1, 6)
-			interacted = true
-
-	if Input.is_action_just_pressed("p1_primary"):
-		players_ready[0] = true
-		interacted = true
-	if Input.is_action_just_pressed("p2_primary"):
-		players_ready[1] = true
-		interacted = true
-	if Input.is_action_just_pressed("p2_secondary"):
-		players_ready[1] = false
-		interacted = true
-	if interacted:
-		play_ui_sound()
-
-	if players_ready[0] and players_ready[1]:
+	if Input.is_action_just_pressed("p1_primary") and can_start_round():
 		start_round()
+		play_ui_sound()
 
 func process_player_modal_input() -> void:
 	var interacted := false
@@ -517,9 +491,24 @@ func process_menu_click(click_position: Vector2) -> void:
 				if not card.has_point(click_position):
 					continue
 				selected_player_slot = slot
+				interacted = true
+				if player_slot_types[slot] == SlotType.EMPTY:
+					var human_rect := Rect2(card.position + Vector2(26, 150), Vector2(card.size.x - 52, 66))
+					var ai_rect := Rect2(card.position + Vector2(26, 235), Vector2(card.size.x - 52, 66))
+					if human_rect.has_point(click_position):
+						set_slot_type(slot, SlotType.HUMAN)
+						interacted = true
+					elif ai_rect.has_point(click_position):
+						set_slot_type(slot, SlotType.AI)
+						interacted = true
+					continue
+				var clear_rect := Rect2(card.position + Vector2(20, 16), Vector2(card.size.x - 40, 30))
 				var gun_rect := Rect2(card.position + Vector2(94, 294), Vector2(65, 62))
 				var perk_rect := Rect2(card.position + Vector2(169, 294), Vector2(43, 62))
-				if gun_rect.has_point(click_position):
+				if clear_rect.has_point(click_position):
+					set_slot_type(slot, SlotType.EMPTY)
+					interacted = true
+				elif gun_rect.has_point(click_position):
 					open_player_modal(slot, 1)
 					interacted = true
 				elif perk_rect.has_point(click_position):
@@ -528,8 +517,7 @@ func process_menu_click(click_position: Vector2) -> void:
 			if Rect2(22, 493, 185, 44).has_point(click_position):
 				enter_map_selection_screen()
 				interacted = true
-			elif Rect2(222, 493, 756, 44).has_point(click_position):
-				players_ready = [true, true]
+			elif Rect2(222, 493, 756, 44).has_point(click_position) and can_start_round():
 				start_round()
 				interacted = true
 		MenuScreen.PLAYER_MODAL:
@@ -584,17 +572,28 @@ func select_map(direction: int) -> void:
 	map_menu_cursor = selected_map
 	map_texture = MapCatalog.texture_for(selected_map)
 	platforms = MapCatalog.platforms_for(selected_map)
+	ai_platform_graph.rebuild(platforms)
 	var spawns := MapCatalog.spawns_for(selected_map)
 	for index in players.size():
 		players[index].spawn_position = spawns[index]
 	queue_redraw()
+
+func set_slot_type(slot: int, slot_type: int) -> void:
+	if slot < 0 or slot >= player_slot_types.size():
+		return
+	player_slot_types[slot] = slot_type
+	players_ready[slot] = false
+	queue_redraw()
+
+func can_start_round() -> bool:
+	return player_slot_types.any(func(slot_type: int) -> bool: return slot_type != SlotType.EMPTY)
 
 func enter_selection_screen() -> void:
 	round_started = false
 	match_over = false
 	winner_text = ""
 	menu_screen = MenuScreen.MAIN
-	players_ready = [false, false]
+	players_ready = [false, false, false, false]
 	input_lock_frames = 2
 	effects.clear()
 	clear_weapon_crate()
@@ -607,7 +606,7 @@ func enter_selection_screen() -> void:
 func enter_custom_mode_screen() -> void:
 	menu_screen = MenuScreen.CUSTOM_MODE
 	custom_mode_cursor = 0
-	players_ready = [false, false]
+	players_ready = [false, false, false, false]
 	input_lock_frames = 2
 	queue_redraw()
 
@@ -619,7 +618,7 @@ func enter_map_selection_screen() -> void:
 
 func enter_player_setup_screen() -> void:
 	menu_screen = MenuScreen.PLAYER_SETUP
-	players_ready = [false, false]
+	players_ready = [false, false, false, false]
 	selected_player_slot = 0
 	player_modal_kind = 0
 	input_lock_frames = 2
@@ -669,6 +668,8 @@ func enter_settings_screen() -> void:
 	queue_redraw()
 
 func start_round() -> void:
+	if not can_start_round():
+		return
 	match_over = false
 	winner_text = ""
 	round_started = true
@@ -676,13 +677,56 @@ func start_round() -> void:
 	effects.clear()
 	clear_weapon_crate()
 	crate_spawn_frames = 105
+	match_participant_count = 0
+	ai_platform_graph.rebuild(platforms)
+	var spawns := MapCatalog.spawns_for(selected_map)
 	for index in players.size():
+		var active: bool = player_slot_types[index] != SlotType.EMPTY
+		players[index].spawn_position = spawns[index]
+		players[index].set_ai_controlled(player_slot_types[index] == SlotType.AI)
 		players[index].set_perk(player_slot_perks[index])
 		players[index].set_weapon(selected_weapons[index])
 		players[index].reset_for_match()
-		players[index].visible = true
-		huds[index].visible = true
+		players[index].display_name = player_slot_names[index]
+		players[index].visible = active
+		players[index].eliminated = not active
+		huds[index].visible = active
+		if active:
+			match_participant_count += 1
 	queue_redraw()
+
+func update_ai_controls() -> void:
+	for player in players:
+		if not player.is_ai_controlled or player.eliminated:
+			continue
+		var target: Node = null
+		var closest_distance := INF
+		for candidate in players:
+			if candidate == player or candidate.eliminated:
+				continue
+			var distance: float = player.position.distance_to(candidate.position)
+			if distance < closest_distance:
+				closest_distance = distance
+				target = candidate
+		var controls := {"left": false, "right": false, "jump": false, "down": false, "primary": false, "secondary": false, "jump_just": false, "down_just": false}
+		if target != null:
+			var destination: Vector2 = target.position
+			var current_platform: int = ai_platform_graph.nearest_platform(player.position)
+			var target_platform: int = ai_platform_graph.nearest_platform(target.position)
+			var next_platform: int = ai_platform_graph.next_platform_toward(current_platform, target_platform)
+			if next_platform >= 0 and next_platform != current_platform:
+				destination = ai_platform_graph.platform_center(next_platform)
+			var difference: Vector2 = destination - player.position
+			controls["left"] = difference.x < -24.0
+			controls["right"] = difference.x > 24.0
+			var target_difference: Vector2 = target.position - player.position
+			controls["primary"] = absf(target_difference.y) < 95.0
+			var wants_jump: bool = difference.y < -32.0 or (next_platform != current_platform and absf(difference.x) > 85.0) or player.position.y > 500.0
+			var was_jumping := bool(ai_previous_jump.get(player.player_index, false))
+			controls["jump"] = wants_jump
+			controls["jump_just"] = wants_jump and not was_jumping
+			ai_previous_jump[player.player_index] = wants_jump
+		player.set_ai_controls(controls)
 
 func find_landing_y(previous: Vector2, current: Vector2) -> float:
 	for platform in platforms:
@@ -692,12 +736,13 @@ func find_landing_y(previous: Vector2, current: Vector2) -> float:
 				return top
 	return NAN
 
-func spawn_bullet(shooter: Node, start: Vector2, direction: int, attack: Dictionary) -> void:
+func spawn_bullet(shooter: Node, start: Vector2, direction: int, attack: Dictionary, shell_round: bool = false) -> void:
 	var projectile := ProjectileScript.new()
 	add_child(projectile)
 	projectile.setup(
 		self, shooter, start, direction,
-		float(attack["firepower"]), float(attack["speed"]), float(attack["spread"])
+		float(attack["firepower"]), float(attack["speed"]), float(attack["spread"]),
+		-1.0, 0, false, {"kind": "bullet_shell" if shell_round else "bullet"}
 	)
 
 func spawn_thrown_gun(shooter: Node, start: Vector2, direction: int, attack: Dictionary) -> void:
@@ -835,11 +880,14 @@ func melee_attack(
 	return hit_count
 
 func spawn_hit_effect(at_position: Vector2, color: Color, hit_label: String = "") -> void:
-	effects.append({"type": "hit", "position": at_position, "color": color, "label": hit_label if not hit_label.is_empty() else "HIT", "life": 7})
+	# Redux impact feedback is a conspicuous red/orange burst, independent of
+	# the attacker's custom player colour.
+	var impact_color := Color("ff5a24")
+	effects.append({"type": "hit", "position": at_position, "color": impact_color, "label": hit_label if not hit_label.is_empty() else "HIT", "life": 7})
 	# The original hit path reuses the small expanding wave used by the crate
 	# and explosion feedback. Keep the text/spark layer as a readable supplement.
 	effects.append({"type": "small_wave", "position": at_position, "scale": 0.1, "life": 15})
-	spawn_shrapnel(at_position, color, 1, 5)
+	spawn_shrapnel(at_position, Color("ff8a2b"), 1, 5)
 
 func spawn_combat_text(at_position: Vector2, label: String, color: Color = Color.WHITE, big: bool = false) -> void:
 	if label.is_empty():
@@ -1073,7 +1121,10 @@ func clear_weapon_crate() -> void:
 
 func on_player_eliminated(_player: Node) -> void:
 	var survivors := players.filter(func(candidate: Node) -> bool: return not candidate.eliminated)
-	if survivors.size() == 1:
+	if survivors.is_empty():
+		match_over = true
+		winner_text = "NO SURVIVORS"
+	elif survivors.size() == 1 and match_participant_count > 1:
 		match_over = true
 		winner_text = "%s WINS!" % survivors[0].display_name
 
@@ -1085,11 +1136,15 @@ func reset_match() -> void:
 	clear_weapon_crate()
 	crate_spawn_frames = 105
 	for index in players.size():
+		var active: bool = player_slot_types[index] != SlotType.EMPTY
+		players[index].set_ai_controlled(player_slot_types[index] == SlotType.AI)
 		players[index].set_perk(player_slot_perks[index])
 		players[index].set_weapon(selected_weapons[index])
 		players[index].reset_for_match()
+		players[index].visible = active
+		players[index].eliminated = not active
 		huds[index].shown_health = 100.0
-		huds[index].visible = true
+		huds[index].visible = active
 
 func _draw() -> void:
 	draw_rect(Rect2(0, 0, 1000, 560), Color.BLACK, true)
@@ -1407,31 +1462,10 @@ func draw_map_selection(font: Font) -> void:
 	draw_string(font, Vector2(30, 550), menu_text("↑ ↓ SELECT MAP    Z CONTINUE    X / ESC BACK", "↑ ↓ 选择地图    Z 继续    X / ESC 返回"), HORIZONTAL_ALIGNMENT_LEFT, 760, 12, Color("e6e6e6"))
 
 func draw_map_scene() -> void:
-	# scene1/2/3 frame N is the complete three-layer art for map N in the
-	# original controller. It is not a ten-frame animation of map 1.
-	if not round_started:
-		draw_texture(map_texture, Vector2.ZERO)
-		return
-	# The original extracted movie layers use transparent cut-outs that render
-	# as a white canvas in the current Godot Web renderer. Keep the animated
-	# layers active for the desktop research build, while using the verified
-	# static map art as a Web-safe fallback until those layers are precomposed.
-	if OS.has_feature("web"):
-		draw_texture(map_texture, Vector2.ZERO)
-		return
-	# Keep the verified 1000x560 map art as the opaque base. The extracted
-	# movie clips contain transparent cut-outs and are decoration/platform
-	# overlays; using them as the only base can expose the exporter matte.
+	# The scene1/2/3 research layers contain opaque white mattes in some
+	# renderers and no extra nested animation was found. Use the verified full
+	# 1000x560 composite on both desktop and Web so gameplay cannot become white.
 	draw_texture(map_texture, Vector2.ZERO)
-	var background := MapCatalog.scene_layer_for("scene1", selected_map)
-	var decorations := MapCatalog.scene_layer_for("scene2", selected_map)
-	var platforms_layer := MapCatalog.scene_layer_for("scene3", selected_map)
-	if background == null or decorations == null or platforms_layer == null:
-		draw_texture(map_texture, Vector2.ZERO)
-		return
-	draw_scene_layer(background, MapCatalog.scene_layer_origin("scene1"))
-	draw_scene_layer(decorations, MapCatalog.scene_layer_origin("scene2"))
-	draw_scene_layer(platforms_layer, MapCatalog.scene_layer_origin("scene3"))
 
 func draw_scene_layer(texture: Texture2D, source_origin: Vector2) -> void:
 	draw_texture_rect_region(
@@ -1453,29 +1487,48 @@ func draw_player_setup(font: Font) -> void:
 	draw_hover_feedback(Rect2(22, 493, 185, 44), Color("ff7a7a"))
 	draw_string(font, Vector2(39, 523), menu_text("BACK", "返回"), HORIZONTAL_ALIGNMENT_LEFT, 150, 22, Color.WHITE)
 	var start_rect := Rect2(222, 493, 756, 44)
-	draw_rect(start_rect, Color("00a900"), true)
-	draw_hover_feedback(start_rect, Color("7dff7d"))
+	draw_rect(start_rect, Color("00a900") if can_start_round() else Color("626262"), true)
+	if can_start_round():
+		draw_hover_feedback(start_rect, Color("7dff7d"))
 	draw_string(font, Vector2(252, 523), menu_text("START!", "开始！"), HORIZONTAL_ALIGNMENT_LEFT, 680, 22, Color.WHITE)
-	draw_string(font, Vector2(30, 550), menu_text("CLICK GUN / PERK TO CUSTOMIZE    P1 Z READY    P2 T READY", "点击武器 / 技能自定义    P1 Z 准备    P2 T 准备"), HORIZONTAL_ALIGNMENT_LEFT, 860, 12, Color("e6e6e6"))
+	draw_string(font, Vector2(30, 550), menu_text("CLEAR OR ADD ANY SLOT    Z STARTS WHEN ONE SLOT EXISTS", "任意增删四个槽位    至少一个角色时时按 Z 开始"), HORIZONTAL_ALIGNMENT_LEFT, 860, 12, Color("e6e6e6"))
 
 func draw_player_slot_card(font: Font, slot: int, card: Rect2) -> void:
 	var color: Color = player_slot_colors[slot]
 	var weapon_id: int = selected_weapons[slot] if slot < selected_weapons.size() else 1
 	var weapon := WeaponCatalog.get_weapon(weapon_id)
-	var is_active := slot < players.size()
+	var is_active: bool = player_slot_types[slot] != SlotType.EMPTY
 	draw_rect(card, Color("f5f5f5"), true)
 	draw_rect(card, Color("111111"), false, 3.0)
+	if not is_active:
+		draw_string(font, card.position + Vector2(0, 40), menu_text("SLOT EMPTY", "槽位为空"), HORIZONTAL_ALIGNMENT_CENTER, card.size.x, 17, Color("e56b6f"))
+		draw_string(font, card.position + Vector2(20, 85), menu_text("SELECT A", "请选择"), HORIZONTAL_ALIGNMENT_CENTER, card.size.x - 40, 23, Color("333333"))
+		draw_string(font, card.position + Vector2(20, 112), menu_text("PLAYER TYPE", "玩家类型"), HORIZONTAL_ALIGNMENT_CENTER, card.size.x - 40, 23, Color("333333"))
+		var human_rect := Rect2(card.position + Vector2(26, 150), Vector2(card.size.x - 52, 66))
+		var ai_rect := Rect2(card.position + Vector2(26, 235), Vector2(card.size.x - 52, 66))
+		draw_rect(human_rect, Color("d0d0d0"), true)
+		draw_rect(human_rect, Color("292929"), false, 2.0)
+		draw_hover_feedback(human_rect, Color("ff9f43"))
+		draw_string(font, human_rect.position + Vector2(0, 43), menu_text("HUMAN", "玩家"), HORIZONTAL_ALIGNMENT_CENTER, human_rect.size.x, 24, Color("333333"))
+		draw_rect(ai_rect, Color("d0d0d0"), true)
+		draw_rect(ai_rect, Color("292929"), false, 2.0)
+		draw_hover_feedback(ai_rect, Color("ff9f43"))
+		draw_string(font, ai_rect.position + Vector2(0, 43), "AI", HORIZONTAL_ALIGNMENT_CENTER, ai_rect.size.x, 24, Color("333333"))
+		return
 	draw_rect(Rect2(card.position + Vector2(20, 16), Vector2(card.size.x - 40, 30)), Color("d69a9d"), true)
 	draw_string(font, card.position + Vector2(30, 38), menu_text("CLEAR SLOT", "清空槽位"), HORIZONTAL_ALIGNMENT_LEFT, 145, 16, Color("4b2730"))
-	draw_string(font, card.position + Vector2(190, 38), "×", HORIZONTAL_ALIGNMENT_LEFT, 24, 25, Color("e60000"))
+	var clear_cross := card.position + Vector2(card.size.x - 31, 31)
+	draw_line(clear_cross + Vector2(-7, -7), clear_cross + Vector2(7, 7), Color("e60000"), 5.0)
+	draw_line(clear_cross + Vector2(7, -7), clear_cross + Vector2(-7, 7), Color("e60000"), 5.0)
 	draw_string(font, card.position + Vector2(26, 70), menu_text("name:", "名称："), HORIZONTAL_ALIGNMENT_LEFT, 100, 12, Color("585858"))
 	draw_rect(Rect2(card.position + Vector2(20, 76), Vector2(card.size.x - 40, 27)), Color("bfe4f8"), true)
 	draw_string(font, card.position + Vector2(28, 96), player_slot_names[slot], HORIZONTAL_ALIGNMENT_LEFT, 175, 15, Color("1d2e3c"))
-	if slot > 0:
+	if player_slot_types[slot] == SlotType.AI:
 		draw_string(font, card.position + Vector2(0, 122), menu_text("AI PLAYER", "AI 玩家"), HORIZONTAL_ALIGNMENT_CENTER, card.size.x, 18, Color("e32323"))
 
-	var preview_player := mini(slot, players.size() - 1)
-	var avatar_rect := Rect2(card.position + Vector2(22, 112), Vector2(104, 112))
+	var preview_player := slot
+	var content_shift := 24.0 if player_slot_types[slot] == SlotType.AI else 0.0
+	var avatar_rect := Rect2(card.position + Vector2(22, 112 + content_shift), Vector2(104, 112))
 	if weapon_id <= 5:
 		var avatar_texture: Texture2D = players[preview_player].texture_for_weapon(weapon_id)
 		draw_texture_rect(avatar_texture, avatar_rect, false, Color(1, 1, 1, 0.96))
@@ -1485,7 +1538,7 @@ func draw_player_slot_card(font: Font, slot: int, card: Rect2) -> void:
 		draw_card_weapon_shape(avatar_rect.position + Vector2(66, 62), weapon_id, 1.0)
 	for index in 3:
 		var label: String = [menu_text("HAT", "帽子"), menu_text("SHIRT", "上衣"), menu_text("FACE", "脸部")][index]
-		var edit_rect := Rect2(card.position + Vector2(126, 112 + index * 35), Vector2(80, 29))
+		var edit_rect := Rect2(card.position + Vector2(126, 112 + content_shift + index * 35), Vector2(80, 29))
 		draw_rect(edit_rect, Color("d5d5d5"), true)
 		draw_rect(edit_rect, Color("292929"), false, 2.0)
 		draw_string(font, edit_rect.position + Vector2(0, 21), label, HORIZONTAL_ALIGNMENT_CENTER, edit_rect.size.x, 14, Color("333333"))
@@ -1511,8 +1564,8 @@ func draw_player_slot_card(font: Font, slot: int, card: Rect2) -> void:
 	draw_hover_feedback(perk_rect, Color("71d24c"))
 	draw_perk_icon(perk_rect.position + Vector2(21, 26), player_slot_perks[slot], 0.72)
 	draw_string(font, perk_rect.position + Vector2(-3, 59), menu_text("PERK", "技能"), HORIZONTAL_ALIGNMENT_CENTER, 50, 11, Color("303030"))
-	var status_text := menu_text("READY", "已准备") if slot < 2 and players_ready[slot] else (menu_text("ACTIVE", "玩家") if is_active else menu_text("RESERVED", "预留"))
-	draw_string(font, card.position + Vector2(20, 416), status_text, HORIZONTAL_ALIGNMENT_LEFT, 150, 12, Color("159447") if is_active else Color("777777"))
+	var status_text := menu_text("AI PLAYER", "AI 玩家") if player_slot_types[slot] == SlotType.AI else menu_text("HUMAN PLAYER", "人类玩家")
+	draw_string(font, card.position + Vector2(20, 416), status_text, HORIZONTAL_ALIGNMENT_LEFT, 150, 12, Color("159447"))
 
 func draw_card_weapon_shape(center: Vector2, weapon_id: int, scale_value: float) -> void:
 	var length := 30.0 * scale_value

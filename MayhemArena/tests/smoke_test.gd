@@ -5,7 +5,9 @@ const MapCatalog = preload("res://scripts/game/map_catalog.gd")
 const GameScript = preload("res://scripts/game/game.gd")
 const PlayerScript = preload("res://scripts/players/player.gd")
 const WeaponCrateScript = preload("res://scripts/weapons/weapon_crate.gd")
+const ProjectileScript = preload("res://scripts/weapons/projectile.gd")
 const FontCatalog = preload("res://scripts/ui/font_catalog.gd")
+const PlatformGraphScript = preload("res://scripts/ai/platform_graph.gd")
 
 var failures: Array[String] = []
 
@@ -36,7 +38,14 @@ func _init() -> void:
 		var map_texture := MapCatalog.texture_for(map_id)
 		expect(map_texture.get_width() == 1000 and map_texture.get_height() == 560, "map %d must retain the original 1000 x 560 stage" % map_id)
 		expect(not MapCatalog.platforms_for(map_id).is_empty(), "map %d must have playable platform tops" % map_id)
-		expect(MapCatalog.spawns_for(map_id).size() == 2, "map %d must provide two local-player spawns" % map_id)
+		expect(MapCatalog.spawns_for(map_id).size() == 4, "map %d must provide four local-player slot spawns" % map_id)
+		var platform_graph := PlatformGraphScript.new()
+		platform_graph.rebuild(MapCatalog.platforms_for(map_id))
+		expect(platform_graph.platforms.size() == MapCatalog.platforms_for(map_id).size(), "map %d AI graph must include every playable platform" % map_id)
+		var connection_count := 0
+		for neighbors in platform_graph.edges.values():
+			connection_count += neighbors.size()
+		expect(connection_count > 0, "map %d AI graph must provide jump or drop connections" % map_id)
 	expect(near(MapCatalog.platforms_for(2)[0].position.y, 110.0), "exported maps 2-10 must receive the scene3 vertical alignment correction")
 
 	var expected_ammo := {1: 9, 2: 24, 3: 6, 4: 14, 5: -1}
@@ -89,6 +98,10 @@ func _init() -> void:
 	expect(random_spawn_weapon in WeaponCatalog.CRATE_WEAPON_IDS, "Random Weapon perk must select from the crate weapon pool")
 	player.set_perk(0)
 	player.set_weapon(1)
+	player.set_ai_controlled(true)
+	player.set_ai_controls({"right": true, "jump": true, "jump_just": true, "primary": true})
+	expect(player.control_pressed("right") and player.control_just_pressed("jump") and player.control_pressed("primary"), "AI must drive the same control interface as a human player")
+	player.set_ai_controlled(false)
 	expect(player.visual_frame_cache.size() == 77, "Sand Hawk's attack and reload frames must preload")
 	player.start_weapon_visual("primary")
 	expect(player.visual_action_active and player.visual_frame == 1 and player.visual_frame_end == 11, "Sand Hawk primary timeline must start at frame 1 and end at frame 11")
@@ -109,6 +122,15 @@ func _init() -> void:
 	player.start_weapon_visual("primary")
 	expect(player.visual_frame == 1 and player.visual_frame_end == 32, "AK primary attack must use the extracted 32-frame timeline")
 	expect(player.weapon_frame_texture() != null, "AK primary attack must load the extracted composite player frame")
+	expect(player.portrait_texture() != null, "crate weapons must use their own composite static portrait instead of a default gun placeholder")
+	var cleaned_composite := player.portrait_texture().get_image()
+	var backing_pixels := 0
+	for y in range(88, mini(167, cleaned_composite.get_height())):
+		for x in range(78, mini(139, cleaned_composite.get_width())):
+			var pixel := cleaned_composite.get_pixel(x, y)
+			if pixel.a > 0.9 and pixel.b > 0.75 and pixel.g > 0.40 and pixel.r < 0.12:
+				backing_pixels += 1
+	expect(backing_pixels == 0, "crate composite frames must remove the solid player-colour backing block")
 	player.process_visual_animation()
 	expect(player.visual_frame == 2, "AK composite animation must advance one frame per 35 Hz tick")
 	var crate_visual_ranges := {
@@ -200,6 +222,7 @@ func _init() -> void:
 	game.effects.clear()
 	game.spawn_hit_effect(Vector2(300, 160), Color("0099ff"), "SNIPED")
 	expect(game.effects.size() == 7 and game.effects[0]["label"] == "SNIPED", "hit feedback must include the original label and shrapnel burst")
+	expect(Color(game.effects[0]["color"]) == Color("ff5a24") and Color(game.effects[2]["color"]) == Color("ff8a2b"), "hit feedback must use the original-style warm impact palette instead of player colour")
 	game.update_effect(2)
 	expect(game.effects[2]["type"] == "shrapnel" and float(game.effects[2]["scale"]) < 1.25, "shrapnel feedback must advance and fade")
 	game.effects.clear()
@@ -222,8 +245,40 @@ func _init() -> void:
 	expect(Vector2(shell_game.effects[0]["position"]).y < shell_start.y, "ejected shells must initially travel upward")
 	shell_game.free()
 
+	var projectile_game := GameScript.new()
+	var projectile_owner := PlayerScript.new()
+	var weak_bullet := ProjectileScript.new()
+	weak_bullet.setup(projectile_game, projectile_owner, Vector2.ZERO, 1, 13.0, 25.0, 0.0)
+	expect(near(weak_bullet.visual_scale_x, 70.0), "low-firepower BULLET must start at the original 70 percent horizontal scale")
+	weak_bullet._physics_process(0.0)
+	expect(weak_bullet.age == 1, "BULLET must remain hidden for its first logic frame")
+	var sniper_bullet := ProjectileScript.new()
+	sniper_bullet.setup(projectile_game, projectile_owner, Vector2.ZERO, 1, 65.0, 25.0, 0.0)
+	sniper_bullet._physics_process(0.0)
+	expect(sniper_bullet.visual_scale_x > 100.0, "high-firepower BULLET must expand toward the original 500 percent scale")
+	var shotgun_pellet := ProjectileScript.new()
+	shotgun_pellet.setup(projectile_game, projectile_owner, Vector2.ZERO, 1, 10.0, 25.0, 0.0, -1.0, 0, false, {"kind": "bullet_shell"})
+	shotgun_pellet._physics_process(0.0)
+	expect(shotgun_pellet.projectile_kind == "bullet_shell" and near(shotgun_pellet.visual_scale_x, 84.0), "BULLET_shell must shorten by 16 percent per original frame")
+	weak_bullet.free()
+	sniper_bullet.free()
+	shotgun_pellet.free()
+	projectile_owner.free()
+	projectile_game.free()
+	expect(WeaponCrateScript.WARNING_START_FRAME == 250 and WeaponCrateScript.WARNING_FRAME_COUNT == 8, "crate must remain steady for 250 frames and only then play its eight-frame warning")
+
 	var menu := GameScript.new()
 	expect(menu.menu_screen == GameScript.MenuScreen.MAIN, "a new game must open on the main menu")
+	expect(menu.player_slot_types == [GameScript.SlotType.HUMAN, GameScript.SlotType.EMPTY, GameScript.SlotType.EMPTY, GameScript.SlotType.AI], "player setup must start with one human, two empty slots, and one AI")
+	expect(menu.can_start_round(), "one non-empty human or AI slot must be enough to start")
+	for slot in 4:
+		menu.set_slot_type(slot, GameScript.SlotType.EMPTY)
+	expect(not menu.can_start_round(), "four empty slots must be the only setup that cannot start")
+	menu.set_slot_type(2, GameScript.SlotType.HUMAN)
+	expect(menu.can_start_round() and menu.player_slot_types[2] == GameScript.SlotType.HUMAN, "any slot must be independently addable as a human")
+	menu.set_slot_type(2, GameScript.SlotType.AI)
+	expect(menu.can_start_round() and menu.player_slot_types[2] == GameScript.SlotType.AI, "any slot must be independently replaceable with AI")
+	menu.player_slot_types = [GameScript.SlotType.HUMAN, GameScript.SlotType.EMPTY, GameScript.SlotType.EMPTY, GameScript.SlotType.AI]
 	menu.process_menu_click(Vector2(750, 320))
 	expect(menu.menu_screen == GameScript.MenuScreen.CUSTOM_MODE, "main menu custom game click must open mode selection")
 	menu.process_menu_click(Vector2(100, 160))
@@ -240,8 +295,25 @@ func _init() -> void:
 	expect(menu.menu_screen == GameScript.MenuScreen.PLAYER_SETUP, "blank modal click must safely close the modal")
 	menu.free()
 
+	var live_game := GameScript.new()
+	live_game.create_players()
+	expect(live_game.players.size() == 4 and live_game.huds.size() == 4, "the four custom-game slots must each have an isolated runtime player and HUD container")
+	live_game.enter_player_setup_screen()
+	live_game.process_menu_click(Vector2(50, 125))
+	expect(live_game.player_slot_types[0] == GameScript.SlotType.EMPTY, "the first slot must be clearable like every other slot")
+	live_game.process_menu_click(Vector2(380, 281))
+	expect(live_game.player_slot_types[1] == GameScript.SlotType.HUMAN, "an empty slot must create a human in its original card position")
+	live_game.process_menu_click(Vector2(790, 125))
+	expect(live_game.player_slot_types[3] == GameScript.SlotType.EMPTY, "the fourth slot must be independently clearable")
+	expect(live_game.can_start_round(), "one remaining human slot must permit starting")
+	live_game.process_menu_click(Vector2(500, 515))
+	expect(live_game.round_started and live_game.match_participant_count == 1, "a single configured slot must create a valid one-participant round")
+	expect(not live_game.players[1].eliminated and live_game.players[1].visible, "the configured slot must be the only active runtime character")
+	expect(live_game.players[0].eliminated and live_game.players[2].eliminated and live_game.players[3].eliminated, "empty slots must not participate in combat")
+	live_game.free()
+
 	if failures.is_empty():
-		print("SMOKE TEST PASSED: 35 Hz, ten maps, five defaults, six Redux perks, action/reload/audio timelines, shell ejection, death/stun/landing/crate effects, thirteen crate weapons, health easing, and pickup verified")
+		print("SMOKE TEST PASSED: 35 Hz, four free player slots, unified AI controls, ten maps, eighteen weapons, line projectiles, delayed crate warning, combat effects, health easing, and pickup verified")
 		quit(0)
 	else:
 		for failure in failures:

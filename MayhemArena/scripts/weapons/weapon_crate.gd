@@ -21,6 +21,11 @@ var pickup_lock_frames := 14
 var age_frames := 0
 var animation_frame := 0
 
+# The original CRATE controller remains steady for 250 logic frames, then
+# plays its eight-frame warning/disappearance timeline once.
+const WARNING_START_FRAME := 250
+const WARNING_FRAME_COUNT := 8
+
 func setup(game: Node, at_position: Vector2, contained_weapon_id: int) -> void:
 	arena = game
 	position = at_position
@@ -33,7 +38,12 @@ func _physics_process(_delta: float) -> void:
 	if not arena.round_started or arena.match_over:
 		return
 	age_frames += 1
-	animation_frame = wrapi(animation_frame + 1, 0, CrateTimeline.size())
+	if age_frames >= WARNING_START_FRAME:
+		animation_frame = age_frames - WARNING_START_FRAME
+		if animation_frame >= WARNING_FRAME_COUNT:
+			arena.on_weapon_crate_lost(self)
+			queue_free()
+			return
 	pickup_lock_frames = maxi(0, pickup_lock_frames - 1)
 
 	if not landed:
@@ -65,5 +75,6 @@ func _physics_process(_delta: float) -> void:
 func _draw() -> void:
 	var bob := sin(age_frames * 0.22) * 1.5 if landed else 0.0
 	var target_size := Vector2(51, 42)
-	var texture: Texture2D = CrateTimeline[animation_frame] if not CrateTimeline.is_empty() else CrateTexture
+	var warning_active := age_frames >= WARNING_START_FRAME
+	var texture: Texture2D = CrateTimeline[clampi(animation_frame, 0, CrateTimeline.size() - 1)] if warning_active and not CrateTimeline.is_empty() else CrateTexture
 	draw_texture_rect(texture, Rect2(-target_size.x * 0.5, -target_size.y + bob, target_size.x, target_size.y), false)

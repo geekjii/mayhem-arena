@@ -392,7 +392,7 @@ func process_map_selection_input() -> void:
 		play_ui_sound()
 
 func process_player_setup_input() -> void:
-	if Input.is_action_just_pressed("back_to_menu"):
+	if Input.is_action_just_pressed("p1_secondary") or Input.is_action_just_pressed("back_to_menu"):
 		enter_map_selection_screen()
 		play_ui_sound()
 		return
@@ -424,9 +424,6 @@ func process_player_setup_input() -> void:
 		interacted = true
 	if Input.is_action_just_pressed("p2_primary"):
 		players_ready[1] = true
-		interacted = true
-	if Input.is_action_just_pressed("p1_secondary"):
-		players_ready[0] = false
 		interacted = true
 	if Input.is_action_just_pressed("p2_secondary"):
 		players_ready[1] = false

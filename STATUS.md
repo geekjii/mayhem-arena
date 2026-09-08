@@ -31,7 +31,7 @@
 | 六个 Perks | ✅ | Triple Jump、No Recoil、Extra Ammo、Random Weapon、Infinite Ammo 等均已接入 | 菜单说明和组合回归测试 |
 | 地图 | ✅ | 十张静态地图、碰撞顶面和出生点；三层按 `selected_map` 固定取对应帧；递归检查确认三层选中帧没有额外多帧嵌套 MovieClip，因此不再错误循环混帧 | 仅保留逐图视觉验收；若后续发现独立装饰素材，再按单图回退接入 |
 | 战斗反馈 | ✅/🟡 | 血条缓动、暖色命中反馈、原脚本式线状子弹、特殊弹丸辨识、延迟箱体警告、HUD 震动、死亡爆炸、眩晕、落地尘土、受击闪红和重生保护 | 原始 Shape 的逐像素替换和原版换弹人物画面仍可继续精修 |
-| 菜单 | 🟡 | Main → Custom Game → Map Selection → 四槽 Player Setup；四格都可清空并重建 HUMAN/AI，任意一个非空即可开始，全空禁用 | AI 动态背景仍为静态占位；完整 AI 尚在 AI-3 至 AI-7 |
+| 菜单 | 🟡 | Main → Custom Game → Map Selection → 四槽 Player Setup；四格都可清空并重建 HUMAN/AI，任意一个非空即可开始，全空禁用 | AI 动态背景仍为静态占位；完整 AI 尚在 AI-4 至 AI-7 |
 | 本地化 | ✅/🟡 | 项目内置 Source Han Sans CN Heavy；统一字体入口；中文切换和字形断言通过 | 继续观察不同浏览器下的排版细节 |
 | Web 导出 | ✅/🟡 | 上一构建的浏览器入口、主菜单、地图选择和中文路径无日志错误 | 最新四槽、视觉修复与 AI 尚未重导出；待本轮大步骤收尾后统一更新 |
 | macOS / Windows | ⏸️ | 目标平台已确定 | 导出模板、测试包、真实 Windows 键盘/声音/全屏验证 |

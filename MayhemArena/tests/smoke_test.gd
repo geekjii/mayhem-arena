@@ -19,8 +19,8 @@ func _init() -> void:
 	expect(Engine.physics_ticks_per_second == 35, "physics tick rate must be 35 Hz")
 	expect(Engine.max_fps == 35, "render cap must be 35 FPS")
 	expect(WeaponCatalog.DEFAULT_WEAPON_IDS.size() == 5, "the selectable default pool must contain five weapons")
-	expect(WeaponCatalog.CRATE_WEAPON_IDS.size() == 3, "the first crate weapon batch must contain three weapons")
-	expect(WeaponCatalog.WEAPONS.size() == 8, "the catalog must contain five default and three crate weapons")
+	expect(WeaponCatalog.CRATE_WEAPON_IDS.size() == 13, "the complete crate weapon pool must contain thirteen weapons")
+	expect(WeaponCatalog.WEAPONS.size() == 18, "the catalog must contain five default and thirteen crate weapons")
 	expect(MapCatalog.MAP_TEXTURES.size() == 10, "all ten Redux map art frames must be available")
 	for map_id in range(1, 11):
 		var map_texture := MapCatalog.texture_for(map_id)
@@ -42,6 +42,17 @@ func _init() -> void:
 	var angry_cow := WeaponCatalog.get_weapon(3)
 	expect(near(float(angry_cow["secondary"]["speed"]), 47.0), "Angry Cow aimed shot speed must be 47")
 	expect(near(float(angry_cow["secondary"]["firepower"]) * 0.4, 14.8), "Angry Cow aimed damage must be 14.8")
+	var scattergun := WeaponCatalog.get_weapon(6)
+	var rapid_carbine := WeaponCatalog.get_weapon(7)
+	expect(int(scattergun["primary"]["ammo_cost"]) == 1 and int(scattergun["secondary"]["ammo_cost"]) == 2, "Scattergun must use one shell normally and two shells for BOOM")
+	expect(int(rapid_carbine["primary"].get("ammo_cost", 1)) == 1 and int(rapid_carbine["secondary"]["ammo_cost"]) == 4, "M4 special attack must consume four rounds")
+	var expected_crate_names := ["SHOTGUN", "M4", "HOMING MISSILE", "AK-47", "BASEBALL BAT", "BOW", "SNIPER", "MP5K", "UZI", "MINI GUN", "UMBRELLA", "THROWING KNIFE", "BOMB"]
+	for index in WeaponCatalog.CRATE_WEAPON_IDS.size():
+		var crate_id: int = WeaponCatalog.CRATE_WEAPON_IDS[index]
+		var crate_weapon := WeaponCatalog.get_weapon(crate_id)
+		expect(str(crate_weapon["name"]) == expected_crate_names[index], "crate weapon %d must retain its original name" % crate_id)
+		expect(bool(crate_weapon.get("crate_only", false)), "crate weapon %d must be marked crate-only" % crate_id)
+		expect(crate_weapon.has("primary") and crate_weapon.has("secondary"), "crate weapon %d must provide both attacks" % crate_id)
 
 	var displayed_health := 100.0
 	for frame in 8:
@@ -49,6 +60,24 @@ func _init() -> void:
 	expect(displayed_health < 4.0 and displayed_health > 3.0, "Redux health easing should retain about 3.9% after eight frames")
 
 	var player := PlayerScript.new()
+	player.set_weapon(1)
+	player.set_perk(1)
+	expect(player.max_jump_count() == 3, "Triple Jump perk must increase the jump allowance to three")
+	player.set_perk(3)
+	player.equip_weapon(1, false)
+	expect(player.ammo == 12, "Extra Ammo perk must round Sand Hawk capacity up by 33 percent")
+	player.set_perk(2)
+	player.equip_weapon(1, false)
+	player.velocity.x = 0.0
+	player.facing = 1
+	player.apply_weapon_recoil(5.0)
+	expect(near(player.velocity.x, 0.0), "No Recoil perk must suppress weapon self-recoil")
+	player.set_perk(5)
+	player.equip_weapon(1, false)
+	player.set_perk(4)
+	var random_spawn_weapon := player.spawn_weapon_id()
+	expect(random_spawn_weapon in WeaponCatalog.CRATE_WEAPON_IDS, "Random Weapon perk must select from the crate weapon pool")
+	player.set_perk(0)
 	player.set_weapon(1)
 	expect(player.visual_frame_cache.size() == 41, "Sand Hawk's 11 primary and 30 secondary frames must preload")
 	player.start_weapon_visual("primary")
@@ -58,14 +87,21 @@ func _init() -> void:
 	expect(player.visual_frame == 2, "weapon animation must advance exactly one original frame per 35 Hz tick")
 	player.start_reload()
 	expect(player.reload_frames == 55, "Sand Hawk reload must retain the original 55-frame sequence")
+	expect(not player.visual_action_active and player.visual_frame == 0, "reload must interrupt the previous attack visual timeline")
 	player.equip_weapon(6, false)
 	expect(player.default_weapon_id == 1, "crate pickup must not replace the selected respawn weapon")
-	expect(player.weapon_id == 6 and player.ammo == 8, "crate pickup must equip and refill the contained weapon")
+	expect(player.weapon_id == 6 and player.ammo == 6, "crate pickup must equip and refill the contained weapon")
+	player.consume_ammo(2)
+	expect(player.ammo == 4, "multi-projectile attacks must consume their original shell count")
 	player.start_reload()
 	expect(player.reload_frames == 12, "empty crate weapons must be discarded quickly instead of reloading")
 	player.lives = 2
 	player.lose_life()
 	expect(player.lives == 1 and near(player.position.y, -500.0), "surviving players must respawn from Redux's original off-screen height")
+	expect(player.respawn_invulnerability_frames == 35, "respawning players must receive one second of protection")
+	player.health = 100.0
+	player.take_damage(20.0, 10.0, 0, null)
+	expect(near(player.health, 100.0), "respawn protection must ignore incoming damage")
 	player.free()
 	var crate := WeaponCrateScript.new()
 	expect(crate.weapon_id == 1, "weapon crate script must instantiate")
@@ -97,9 +133,16 @@ func _init() -> void:
 	game.spawn_landing_dust(Vector2(300, 160))
 	expect(game.effects.size() == 1 and game.effects[0]["type"] == "landing_dust", "hard landings must create map-matched original dust")
 	game.free()
+	var shell_game := GameScript.new()
+	shell_game.spawn_shell_eject(null, Vector2(300, 160), 1, 1)
+	expect(shell_game.effects.size() == 1 and shell_game.effects[0]["type"] == "shell", "fire actions must eject a shell effect")
+	var shell_start := Vector2(shell_game.effects[0]["position"])
+	shell_game.update_effect(0)
+	expect(Vector2(shell_game.effects[0]["position"]).y < shell_start.y, "ejected shells must initially travel upward")
+	shell_game.free()
 
 	if failures.is_empty():
-		print("SMOKE TEST PASSED: 35 Hz, ten maps, five defaults, original action/reload/audio timelines, Redux death/stun/landing/crate effects, three crate weapons, health easing, and pickup verified")
+		print("SMOKE TEST PASSED: 35 Hz, ten maps, five defaults, six Redux perks, action/reload/audio timelines, shell ejection, death/stun/landing/crate effects, thirteen crate weapons, health easing, and pickup verified")
 		quit(0)
 	else:
 		for failure in failures:

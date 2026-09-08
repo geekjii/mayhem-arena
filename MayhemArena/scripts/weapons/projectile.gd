@@ -12,6 +12,10 @@ var projectile_kind := "bullet"
 var blast_radius := 0.0
 var gravity := 0.0
 var age := 0
+var max_age := 240
+var homing_turn := 0.0
+var homing_speed := 0.0
+var bounce := false
 
 func setup(
 		game: Node,
@@ -37,13 +41,24 @@ func setup(
 	projectile_kind = str(options.get("kind", "bullet"))
 	blast_radius = float(options.get("blast_radius", 0.0))
 	gravity = float(options.get("gravity", 0.0))
-	var angle := deg_to_rad(-90.0 + 90.0 * facing + randf_range(-spread_degrees * 0.5, spread_degrees * 0.5))
+	max_age = int(options.get("life", 240))
+	homing_turn = float(options.get("turning", 0.0))
+	homing_speed = float(options.get("homing_speed", speed))
+	bounce = bool(options.get("bounce", false))
+	var angle_offset := float(options.get("angle_offset", 0.0)) * facing
+	var angle := deg_to_rad(-90.0 + 90.0 * facing + angle_offset + randf_range(-spread_degrees * 0.5, spread_degrees * 0.5))
 	velocity = Vector2(cos(angle), sin(angle)) * speed
 	z_index = 20
 	queue_redraw()
 
 func _physics_process(_delta: float) -> void:
 	age += 1
+	if age > max_age:
+		if projectile_kind in ["bomb", "homing", "homing_jokes"]:
+			detonate(position)
+		else:
+			queue_free()
+		return
 
 	# Redux used a handful of point tests per 35 Hz frame instead of swept
 	# collision. Keep that coarse behavior, including the possibility of misses.
@@ -57,15 +72,22 @@ func _physics_process(_delta: float) -> void:
 			continue
 		for sample in samples:
 			if target.hit_test_point(sample):
-				if projectile_kind == "rocket":
+				if projectile_kind in ["rocket", "bomb", "homing", "homing_jokes"]:
 					detonate(sample)
 					return
 				var damage := explicit_damage if explicit_damage >= 0.0 else firepower * 0.4
-				target.take_damage(damage, firepower * facing, stun_frames, shooter)
+				if target.umbrella_open and target.facing != facing:
+					if projectile_kind != "knife":
+						target.drain_ammo(firepower * 0.8)
+					target.velocity.x += firepower * facing * 0.25
+				else:
+					target.take_damage(damage, firepower * facing, stun_frames, shooter)
 				arena.spawn_hit_effect(sample, shooter.player_color)
 				queue_free()
 				return
 
+	if projectile_kind in ["homing", "homing_jokes"]:
+		steer_to_closest_target()
 	position += velocity
 	velocity.y += gravity
 	if thrown_gun:
@@ -77,6 +99,23 @@ func _physics_process(_delta: float) -> void:
 		if arena.point_hits_platform(position):
 			detonate(position)
 			return
+	elif projectile_kind == "bomb":
+		rotation += 0.26 * facing
+		if arena.point_hits_platform(position):
+			if bounce:
+				velocity.y = maxf(-9.0, -velocity.y * 0.5)
+				velocity.x *= 0.8
+				if absf(velocity.x) <= 3.0:
+					detonate(position)
+					return
+			else:
+				detonate(position)
+				return
+	elif projectile_kind in ["arrow", "knife", "baseball"]:
+		rotation = velocity.angle()
+		if projectile_kind == "arrow":
+			velocity.y += 0.12
+		arena.spawn_projectile_trail(position, shooter.player_color)
 
 	if position.x < -400.0 or position.x > 1400.0 or position.y < -250.0 or position.y > 850.0:
 		queue_free()
@@ -85,9 +124,40 @@ func detonate(at_position: Vector2) -> void:
 	arena.radial_attack(at_position, shooter, explicit_damage, firepower, blast_radius)
 	queue_free()
 
+func steer_to_closest_target() -> void:
+	if age < 18:
+		return
+	var closest: Node = null
+	var closest_distance := INF
+	for target in arena.players:
+		if target == shooter or target.eliminated:
+			continue
+		var distance := position.distance_to(target.position + Vector2(0, -24))
+		if distance < closest_distance:
+			closest_distance = distance
+			closest = target
+	if closest == null:
+		return
+	var desired := position.direction_to(closest.position + Vector2(0, -24)) * homing_speed
+	velocity = velocity.lerp(desired, clampf(homing_turn / 10.0, 0.03, 0.22))
+
 func _draw() -> void:
 	if thrown_gun:
 		draw_rect(Rect2(-10, -3, 20, 6), Color(0.86, 0.82, 0.58), true)
+	elif projectile_kind == "arrow":
+		draw_line(Vector2(-14, 0), Vector2(10, 0), Color("d9d9d9"), 3.0)
+		draw_colored_polygon(PackedVector2Array([Vector2(10, 0), Vector2(4, -4), Vector2(4, 4)]), Color("a8794f"))
+	elif projectile_kind == "knife":
+		draw_line(Vector2(-12, 0), Vector2(10, 0), Color("d9e1e8"), 4.0)
+		draw_line(Vector2(-3, -4), Vector2(-3, 4), Color("8b5a3c"), 3.0)
+	elif projectile_kind == "baseball":
+		draw_circle(Vector2.ZERO, 6.0, Color("f1f1f1"))
+	elif projectile_kind in ["homing", "homing_jokes"]:
+		draw_circle(Vector2.ZERO, 7.0, Color("9de35a") if projectile_kind == "homing_jokes" else Color("7fb2de"))
+		draw_circle(Vector2.ZERO, 3.0, Color("202020"))
+	elif projectile_kind == "bomb":
+		draw_circle(Vector2.ZERO, 8.0, Color("242424"))
+		draw_circle(Vector2(3, -3), 2.0, Color("ffb000"))
 	elif projectile_kind == "rocket":
 		draw_rect(Rect2(-12, -4, 22, 8), Color("ff7a3d"), true)
 		draw_circle(Vector2(-13, 0), 5.0, Color(1.0, 0.83, 0.25, 0.75))

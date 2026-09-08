@@ -47,6 +47,10 @@ var player_index := 0
 var display_name := "PLAYER"
 var player_color := Color.WHITE
 var spawn_position := Vector2.ZERO
+## Perk ids mirror the original SWF menu: 0 none, 1 triple jump,
+## 2 no recoil, 3 extra ammo, 4 random weapon at spawn, 5 infinite ammo.
+var perk_id := 0
+var umbrella_open := false
 
 var velocity := Vector2.ZERO
 var facing := 1
@@ -57,6 +61,8 @@ var jumps_remaining := 2
 var drop_frames := 0
 var stun_frames := 0
 var hitstop_frames := 0
+var respawn_invulnerability_frames := 0
+var hit_flash_frames := 0
 
 var default_weapon_id := 1
 var weapon_id := 1
@@ -76,6 +82,7 @@ var visual_frame := 0
 var visual_frame_end := 0
 var visual_action_active := false
 var visual_frame_cache: Dictionary = {}
+var transparent_texture_cache: Dictionary = {}
 var walk_phase := 0.0
 var body_visual_y := 0.0
 var hand_visual_y := 0.0
@@ -88,6 +95,7 @@ const MAX_FALL_SPEED := 20.0
 
 func setup(game: Node, index: int, at_position: Vector2, color: Color, starting_weapon: int) -> void:
 	arena = game
+	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	player_index = index
 	display_name = "PLAYER %d" % (index + 1)
 	player_color = color
@@ -107,15 +115,32 @@ func weapon_name() -> String:
 func set_weapon(new_weapon_id: int) -> void:
 	equip_weapon(new_weapon_id, true)
 
+func set_perk(new_perk_id: int) -> void:
+	perk_id = clampi(new_perk_id, 0, 5)
+
+func has_perk(requested_perk_id: int) -> bool:
+	return perk_id == requested_perk_id
+
+func max_jump_count() -> int:
+	return 3 if has_perk(1) else 2
+
+func spawn_weapon_id() -> int:
+	if has_perk(4) and not WeaponCatalog.CRATE_WEAPON_IDS.is_empty():
+		return int(WeaponCatalog.CRATE_WEAPON_IDS.pick_random())
+	return default_weapon_id
+
 func equip_weapon(new_weapon_id: int, make_default: bool = false) -> void:
 	weapon_id = new_weapon_id if WeaponCatalog.is_valid_weapon(new_weapon_id) else 1
 	if make_default:
 		default_weapon_id = weapon_id
 	var weapon := WeaponCatalog.get_weapon(weapon_id)
 	ammo = int(weapon["ammo"])
+	if ammo > 0 and has_perk(3):
+		ammo = maxi(1, roundi(float(ammo) * 1.33))
 	primary_cooldown = 0
 	secondary_cooldown = 0
 	reload_frames = 0
+	umbrella_open = false
 	katana_events.clear()
 	visual_action_active = false
 	precache_weapon_visuals(weapon_id)
@@ -132,6 +157,8 @@ func _physics_process(_delta: float) -> void:
 		return
 	muzzle_flash_frames = maxi(0, muzzle_flash_frames - 1)
 	weapon_kick_frames = maxi(0, weapon_kick_frames - 1)
+	respawn_invulnerability_frames = maxi(0, respawn_invulnerability_frames - 1)
+	hit_flash_frames = maxi(0, hit_flash_frames - 1)
 
 	primary_cooldown = maxi(0, primary_cooldown - 1)
 	secondary_cooldown = maxi(0, secondary_cooldown - 1)
@@ -194,14 +221,14 @@ func process_movement() -> void:
 
 	if Input.is_action_just_pressed(action_name("jump")) and jumps_remaining > 0:
 		jumps_remaining -= 1
-		velocity.y = -JUMP_POWER * (1.0 if jumps_remaining == 1 else 0.8) * jump_multiplier
+		velocity.y = -JUMP_POWER * (1.0 if jumps_remaining == max_jump_count() - 1 else 0.8) * jump_multiplier
 		position.y -= 1.0
 
 	if Input.is_action_just_pressed(action_name("down")) and is_standing_on_platform():
 		drop_frames = 5
 		velocity.y += 1.0
 		position.y += 2.0
-		jumps_remaining = 1
+		jumps_remaining = max_jump_count() - 1
 
 	velocity.x *= FRICTION
 	if absf(velocity.x) < 0.3:
@@ -217,7 +244,7 @@ func process_movement() -> void:
 			var landing_speed := velocity.y
 			position.y = landing_y
 			velocity.y = 0.0
-			jumps_remaining = 2
+			jumps_remaining = max_jump_count()
 			if landing_speed > 2.0:
 				arena.play_landing_sound()
 				for particle in 5:
@@ -240,6 +267,10 @@ func process_weapons() -> void:
 	var weapon := WeaponCatalog.get_weapon(weapon_id)
 	var primary: Dictionary = weapon["primary"]
 	var secondary: Dictionary = weapon["secondary"]
+	if str(secondary["type"]) == "umbrella_open":
+		umbrella_open = secondary_pressed and reload_frames == 0
+	else:
+		umbrella_open = false
 
 	var primary_trigger := primary_pressed
 	if primary.get("semi_auto", false):
@@ -259,8 +290,8 @@ func process_weapons() -> void:
 
 func fire_attack(attack: Dictionary, secondary: bool) -> void:
 	var attack_type := str(attack["type"])
-	if attack_type != "katana_combo" and attack_type != "katana_uppercut" and attack_type != "make_it_rain":
-		if ammo == 0:
+	if attack_type not in ["katana_combo", "katana_uppercut", "make_it_rain", "melee", "bat_throw", "umbrella_open"]:
+		if ammo == 0 and not has_perk(5):
 			start_reload()
 			return
 
@@ -269,26 +300,60 @@ func fire_attack(attack: Dictionary, secondary: bool) -> void:
 	else:
 		primary_cooldown = int(attack["cooldown"])
 	start_weapon_visual("secondary" if secondary else "primary")
-	if attack_type in ["bullet", "pellet_burst", "rocket", "throw_gun"]:
+	if attack_type in ["bullet", "bullet_burst", "pellet_burst", "rocket", "homing", "homing_jokes", "arrow", "arrow_burst", "knife", "bomb", "throw_gun"]:
 		muzzle_flash_frames = 3
 		weapon_kick_frames = 4
+	if attack_type in ["bullet", "bullet_burst", "pellet_burst"]:
+		arena.spawn_shell_eject(self, muzzle_position(), facing, weapon_id)
 
 	match attack_type:
 		"bullet":
-			velocity.x -= float(attack["recoil"]) * facing
+			apply_weapon_recoil(float(attack["recoil"]))
 			arena.spawn_bullet(self, muzzle_position(), facing, attack)
-			consume_ammo()
+			consume_ammo(int(attack.get("ammo_cost", 1)))
 		"pellet_burst":
-			velocity.x -= float(attack["recoil"]) * facing
+			apply_weapon_recoil(float(attack["recoil"]))
 			for pellet in int(attack["pellets"]):
 				arena.spawn_bullet(self, muzzle_position(), facing, attack)
-			consume_ammo()
+			consume_ammo(int(attack.get("ammo_cost", 1)))
+		"bullet_burst":
+			apply_weapon_recoil(float(attack["recoil"]))
+			for shot in int(attack["shots"]):
+				arena.spawn_bullet(self, muzzle_position(), facing, attack)
+			consume_ammo(int(attack.get("ammo_cost", 1)))
 		"rocket":
-			velocity.x -= float(attack["recoil"]) * facing
+			apply_weapon_recoil(float(attack["recoil"]))
 			arena.spawn_rocket(self, muzzle_position(), facing, attack)
-			consume_ammo()
+			consume_ammo(int(attack.get("ammo_cost", 1)))
 		"throw_gun":
 			arena.spawn_thrown_gun(self, muzzle_position(), facing, attack)
+		"arrow":
+			arena.spawn_arrow(self, muzzle_position(), facing, attack, float(attack.get("angle", 0.0)))
+			consume_ammo(int(attack.get("ammo_cost", 1)))
+		"arrow_burst":
+			for angle in attack["angles"]:
+				arena.spawn_arrow(self, muzzle_position(), facing, attack, float(angle))
+			consume_ammo(int(attack.get("ammo_cost", 1)))
+		"homing", "homing_jokes":
+			arena.spawn_homing(self, muzzle_position(), facing, attack, attack_type == "homing_jokes")
+			consume_ammo(int(attack.get("ammo_cost", 1)))
+		"knife":
+			arena.spawn_knife(self, muzzle_position(), facing, attack)
+			consume_ammo(int(attack.get("ammo_cost", 1)))
+		"bomb":
+			arena.spawn_bomb(self, muzzle_position(), facing, attack)
+			consume_ammo(int(attack.get("ammo_cost", 1)))
+		"melee":
+			var melee_hits: int = arena.melee_attack(self, float(attack["range"]), float(attack["min_y"]), float(attack["max_y"]), float(attack["damage"]), float(attack["knockback"]), float(attack["vertical"]), int(attack["hitstop"]), bool(attack.get("respect_umbrella", false)), float(attack.get("block_ammo_damage", 0.0)), int(attack.get("stun", 0)))
+			if bool(attack.get("ammo_on_hit", false)) and melee_hits > 0:
+				consume_ammo(int(attack.get("ammo_cost", 1)))
+		"bat_throw":
+			var hit_count: int = arena.melee_attack(self, float(attack["range"]), float(attack["min_y"]), float(attack["max_y"]), float(attack["damage"]), float(attack["knockback"]), float(attack["vertical"]), int(attack["hitstop"]))
+			if hit_count == 0:
+				arena.spawn_baseball(self, muzzle_position(), facing, attack)
+			consume_ammo(int(attack.get("ammo_cost", 1)))
+		"umbrella_open":
+			umbrella_open = true
 		"make_it_rain":
 			take_damage(float(attack["self_damage"]), 0.0, 0, self)
 			arena.spawn_money_effect(muzzle_position(), player_color)
@@ -296,25 +361,36 @@ func fire_attack(attack: Dictionary, secondary: bool) -> void:
 			katana_events = [{"frames": 0, "power": 12.0}, {"frames": 11, "power": 13.0}]
 		"katana_uppercut":
 			velocity.y = -9.0
-			arena.melee_attack(self, 75.0, -80.0, 30.0, 20.0, 25.0, -10.0, 2)
+			arena.melee_attack(self, 75.0, -80.0, 30.0, 20.0, 25.0, -10.0, 2, true, 20.0, 0)
 
 func process_katana_events() -> void:
 	for index in range(katana_events.size() - 1, -1, -1):
 		katana_events[index]["frames"] = int(katana_events[index]["frames"]) - 1
 		if int(katana_events[index]["frames"]) <= 0:
 			var power := float(katana_events[index]["power"])
-			arena.melee_attack(self, 65.0 if power == 12.0 else 75.0, -40.0, 30.0, 20.0, power, 0.0, 2)
+			arena.melee_attack(self, 65.0 if power == 12.0 else 75.0, -40.0, 30.0, 20.0, power, 0.0, 2, true, power * 0.8, 0)
 			if power == 13.0:
 				velocity.x += 6.0 * facing
 			katana_events.remove_at(index)
 
+func apply_weapon_recoil(recoil: float) -> void:
+	if not has_perk(2):
+		velocity.x -= recoil * facing
+
 func muzzle_position() -> Vector2:
 	return position + Vector2(35.0 * facing, -20.0)
 
-func consume_ammo() -> void:
-	if ammo < 0:
+func consume_ammo(cost: int = 1) -> void:
+	if ammo < 0 or has_perk(5):
 		return
-	ammo -= 1
+	ammo = maxi(0, ammo - maxi(1, cost))
+	if ammo <= 0:
+		start_reload()
+
+func drain_ammo(amount: float) -> void:
+	if ammo < 0 or has_perk(5):
+		return
+	ammo = maxi(0, roundi(float(ammo) - amount))
 	if ammo <= 0:
 		start_reload()
 
@@ -323,13 +399,19 @@ func start_reload() -> void:
 		return
 	reload_total_frames = 12 if weapon_id != default_weapon_id else int(DEFAULT_RELOAD_FRAMES.get(weapon_id, 45))
 	reload_frames = reload_total_frames
+	visual_action_active = false
+	visual_action = ""
+	visual_frame = 0
+	visual_frame_end = 0
+	queue_redraw()
 
 func take_damage(damage: float, horizontal_impulse: float, stun: int, attacker: Node) -> void:
-	if eliminated:
+	if eliminated or respawn_invulnerability_frames > 0:
 		return
 	health -= damage
 	velocity.x += horizontal_impulse
 	stun_frames = maxi(stun_frames, stun)
+	hit_flash_frames = 4
 	if damage > 5.0:
 		arena.play_hit_sound()
 	if is_instance_valid(hud):
@@ -338,10 +420,11 @@ func take_damage(damage: float, horizontal_impulse: float, stun: int, attacker: 
 		arena.spawn_explosion(position, player_color, velocity.x)
 		lose_life()
 
-func receive_melee(damage: float, power: float, vertical: float, freeze: int, attacker: Node) -> void:
+func receive_melee(damage: float, power: float, vertical: float, freeze: int, attacker: Node, melee_stun: int = 0) -> void:
 	var random_knockback := maxf(0.0, power - randf() * 10.0)
 	take_damage(damage, random_knockback * attacker.facing + attacker.velocity.x, 0, attacker)
 	velocity.y += vertical
+	stun_frames = maxi(stun_frames, melee_stun)
 	hitstop_frames = freeze
 	attacker.hitstop_frames = freeze
 
@@ -357,11 +440,13 @@ func lose_life() -> void:
 	health = 100.0
 	velocity = Vector2.ZERO
 	position = Vector2(randf_range(250.0, 750.0), -500.0)
-	jumps_remaining = 2
+	jumps_remaining = max_jump_count()
 	drop_frames = 0
 	stun_frames = 0
 	hitstop_frames = 0
-	set_weapon(default_weapon_id)
+	respawn_invulnerability_frames = 35
+	hit_flash_frames = 0
+	equip_weapon(spawn_weapon_id(), false)
 
 func reset_for_match() -> void:
 	lives = 5
@@ -370,10 +455,12 @@ func reset_for_match() -> void:
 	position = spawn_position
 	eliminated = false
 	visible = true
-	jumps_remaining = 2
+	jumps_remaining = max_jump_count()
 	muzzle_flash_frames = 0
 	weapon_kick_frames = 0
-	set_weapon(default_weapon_id)
+	respawn_invulnerability_frames = 0
+	hit_flash_frames = 0
+	equip_weapon(spawn_weapon_id(), false)
 	if is_instance_valid(hud):
 		hud.shown_health = 100.0
 
@@ -382,10 +469,39 @@ func hit_test_point(point: Vector2) -> bool:
 
 func texture_for_weapon(requested_weapon_id: int) -> Texture2D:
 	var palette: Dictionary = P1_WEAPON_TEXTURES if player_index == 0 else P2_WEAPON_TEXTURES
-	return palette.get(requested_weapon_id, palette[1])
+	return transparent_texture(palette.get(requested_weapon_id, palette[1]))
+
+func transparent_texture(texture: Texture2D) -> Texture2D:
+	if texture == null:
+		return texture
+	var cache_key := texture.get_instance_id()
+	if transparent_texture_cache.has(cache_key):
+		return transparent_texture_cache[cache_key]
+	var image := texture.get_image()
+	if image == null:
+		return texture
+	# The SWF exporter leaves a very faint black matte on some transparent
+	# edges. Remove only near-transparent pixels so the solid outline remains.
+	for y in image.get_height():
+		for x in image.get_width():
+			var pixel := image.get_pixel(x, y)
+			if pixel.a < 0.14:
+				pixel.a = 0.0
+				image.set_pixel(x, y, pixel)
+	var cleaned := ImageTexture.create_from_image(image)
+	transparent_texture_cache[cache_key] = cleaned
+	return cleaned
+
+func base_texture_for_display() -> Texture2D:
+	return transparent_texture(P1_BASE_TEXTURE if player_index == 0 else P2_BASE_TEXTURE)
 
 func start_weapon_visual(action: String) -> void:
 	if not WEAPON_VISUAL_RANGES.has(weapon_id):
+		visual_action = action
+		visual_frame = 1
+		visual_frame_end = 12
+		visual_action_active = true
+		notify_weapon_visual_frame()
 		return
 	var frame_range: Vector2i = WEAPON_VISUAL_RANGES[weapon_id][action]
 	visual_action = action
@@ -431,8 +547,10 @@ func _draw() -> void:
 	if eliminated:
 		return
 	draw_ellipse_shadow()
-	var animated_weapon := weapon_frame_texture()
-	if animated_weapon != null:
+	var animated_weapon := null if reload_frames > 0 else weapon_frame_texture()
+	if weapon_id >= 6:
+		draw_pickup_player()
+	elif animated_weapon != null:
 		draw_layered_player(animated_weapon)
 	else:
 		draw_idle_player()
@@ -444,27 +562,51 @@ func _draw() -> void:
 		draw_circle(muzzle, flash_size, Color(1.0, 0.82, 0.25, muzzle_flash_frames / 3.0))
 	if reload_frames > 0:
 		draw_arc(Vector2(0, -57), 8, -PI * 0.5, -PI * 0.5 + TAU * (1.0 - float(reload_frames) / reload_total_frames), 12, Color.WHITE, 2.0)
+	if hit_flash_frames > 0:
+		draw_rect(Rect2(-20, -64, 40, 62), Color(1.0, 0.2, 0.2, 0.18), false, 3.0)
 
 func draw_idle_player() -> void:
 	var texture := texture_for_weapon(weapon_id)
 	var kick := float(weapon_kick_frames) * 0.65
+	var modulate := visual_modulate()
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2(facing, 1.0))
-	draw_texture(texture, Vector2(-texture.get_width() * 0.5 - kick, -texture.get_height() + body_visual_y))
+	draw_texture(texture, Vector2(-texture.get_width() * 0.5 - kick, -texture.get_height() + body_visual_y), modulate)
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+func draw_pickup_player() -> void:
+	var base_texture: Texture2D = P1_BASE_TEXTURE if player_index == 0 else P2_BASE_TEXTURE
+	var modulate := visual_modulate()
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2(facing, 1.0))
+	base_texture = transparent_texture(base_texture)
+	draw_texture(base_texture, Vector2(-base_texture.get_width() * 0.5, -base_texture.get_height() + body_visual_y), modulate)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 func draw_layered_player(animated_weapon: Texture2D) -> void:
 	var base_texture: Texture2D = P1_BASE_TEXTURE if player_index == 0 else P2_BASE_TEXTURE
+	base_texture = transparent_texture(base_texture)
+	animated_weapon = transparent_texture(animated_weapon)
+	var modulate := visual_modulate()
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2(facing, 1.0))
-	draw_texture(base_texture, Vector2(-base_texture.get_width() * 0.5, -base_texture.get_height() + body_visual_y))
+	draw_texture(base_texture, Vector2(-base_texture.get_width() * 0.5, -base_texture.get_height() + body_visual_y), modulate)
 	var weapon_size := Vector2(animated_weapon.get_width(), animated_weapon.get_height()) * 0.5
 	var weapon_position: Vector2 = WEAPON_CANVAS_ORIGINS[weapon_id] + Vector2(-float(weapon_kick_frames) * 0.45, hand_visual_y)
-	draw_texture_rect(animated_weapon, Rect2(weapon_position, weapon_size), false)
+	draw_texture_rect(animated_weapon, Rect2(weapon_position, weapon_size), false, modulate)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+func visual_modulate() -> Color:
+	var modulate := Color.WHITE
+	if hit_flash_frames > 0:
+		modulate = Color(1.0, 0.45, 0.45, 1.0)
+	elif respawn_invulnerability_frames > 0 and respawn_invulnerability_frames % 4 < 2:
+		modulate = Color(1.0, 1.0, 1.0, 0.45)
+	return modulate
 
 func draw_pickup_weapon() -> void:
 	var kick := float(weapon_kick_frames) * 1.3
-	var start := Vector2((7.0 - kick) * facing, -25)
-	var end := Vector2((25.0 - kick) * facing, -25)
+	var action_progress := clampf(float(visual_frame) / 12.0, 0.0, 1.0) if visual_action_active else 0.0
+	var attack_lift := -sin(action_progress * PI) * 7.0
+	var start := Vector2((7.0 - kick) * facing, -25 + attack_lift)
+	var end := Vector2((25.0 - kick) * facing, -25 + attack_lift)
 	match weapon_id:
 		6:
 			draw_line(start, end + Vector2(8 * facing, 0), Color("e6a15b"), 8.0)
@@ -475,6 +617,39 @@ func draw_pickup_weapon() -> void:
 		8:
 			draw_line(start, end + Vector2(13 * facing, 0), Color("ff7a3d"), 10.0)
 			draw_circle(end + Vector2(14 * facing, 0), 6.0, Color("522a25"))
+		9:
+			draw_line(start, end + Vector2(16 * facing, 0), Color("3a3e45"), 7.0)
+			draw_line(end + Vector2(2 * facing, 0), end + Vector2(12 * facing, 0), Color("a4a9b0"), 4.0)
+		10:
+			draw_line(start, end + Vector2(13 * facing, -2), Color("8b542f"), 8.0)
+			draw_line(end + Vector2(7 * facing, -8), end + Vector2(15 * facing, 1), Color("d6a36a"), 7.0)
+		11:
+			draw_arc(start + Vector2(8 * facing, 3), 15.0, deg_to_rad(-72 if facing == 1 else -108), deg_to_rad(72 if facing == 1 else 108), 12, Color("8dcf85"), 3.0)
+			draw_line(start + Vector2(7 * facing, 3), end + Vector2(15 * facing, -4), Color("d9d9d9"), 3.0)
+		12:
+			draw_line(start, end + Vector2(20 * facing, 0), Color("d8dce4"), 6.0)
+			draw_line(end + Vector2(8 * facing, 0), end + Vector2(21 * facing, 0), Color("515762"), 4.0)
+		13:
+			draw_line(start, end + Vector2(12 * facing, 0), Color("56616d"), 8.0)
+			draw_rect(Rect2(Vector2(-2 if facing == 1 else -9, -28), Vector2(8, 12)), Color("22262d"), true)
+		14:
+			draw_line(start, end + Vector2(11 * facing, 0), Color("6f8794"), 6.0)
+			draw_line(end + Vector2(4 * facing, 0), end + Vector2(14 * facing, 0), Color("d4b56c"), 3.0)
+		15:
+			draw_line(start, end + Vector2(18 * facing, 0), Color("bf9b45"), 10.0)
+			draw_circle(end + Vector2(16 * facing, 0), 5.0, Color("4a4e55"))
+		16:
+			draw_line(start, end + Vector2(10 * facing, 0), Color("79563f"), 4.0)
+			if umbrella_open:
+				var umbrella_center := end + Vector2(9 * facing, -17)
+				draw_arc(umbrella_center, 20.0, PI if facing == 1 else 0.0, TAU if facing == 1 else PI, 16, Color("78a8d8"), 8.0)
+				draw_line(umbrella_center, end + Vector2(9 * facing, 2), Color("d8dce4"), 2.0)
+		17:
+			draw_line(start, end + Vector2(16 * facing, -1), Color("dce4ee"), 4.0)
+			draw_line(end + Vector2(2 * facing, -5), end + Vector2(2 * facing, 5), Color("8b5a3c"), 4.0)
+		18:
+			draw_circle(end + Vector2(6 * facing, 0), 8.0, Color("282b31"))
+			draw_circle(end + Vector2(9 * facing, -3), 2.0, Color("ffb000"))
 	if muzzle_flash_frames > 0:
 		var muzzle := muzzle_position() - position - Vector2(5 * facing, 0)
 		var flash_size := 5.0 + muzzle_flash_frames * 2.0

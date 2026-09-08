@@ -131,7 +131,7 @@ var settings_cursor := 0
 var menu_mouse_position := Vector2(-1000.0, -1000.0)
 var menu_hover_pulse := 0.0
 var match_participant_count := 0
-var ai_previous_jump: Dictionary = {}
+var ai_jump_cooldowns: Dictionary = {}
 var ai_platform_graph = PlatformGraphScript.new()
 
 func _ready() -> void:
@@ -708,25 +708,67 @@ func update_ai_controls() -> void:
 			if distance < closest_distance:
 				closest_distance = distance
 				target = candidate
-		var controls := {"left": false, "right": false, "jump": false, "down": false, "primary": false, "secondary": false, "jump_just": false, "down_just": false}
-		if target != null:
-			var destination: Vector2 = target.position
-			var current_platform: int = ai_platform_graph.nearest_platform(player.position)
-			var target_platform: int = ai_platform_graph.nearest_platform(target.position)
-			var next_platform: int = ai_platform_graph.next_platform_toward(current_platform, target_platform)
-			if next_platform >= 0 and next_platform != current_platform:
-				destination = ai_platform_graph.platform_center(next_platform)
-			var difference: Vector2 = destination - player.position
-			controls["left"] = difference.x < -24.0
-			controls["right"] = difference.x > 24.0
-			var target_difference: Vector2 = target.position - player.position
-			controls["primary"] = absf(target_difference.y) < 95.0
-			var wants_jump: bool = difference.y < -32.0 or (next_platform != current_platform and absf(difference.x) > 85.0) or player.position.y > 500.0
-			var was_jumping := bool(ai_previous_jump.get(player.player_index, false))
-			controls["jump"] = wants_jump
-			controls["jump_just"] = wants_jump and not was_jumping
-			ai_previous_jump[player.player_index] = wants_jump
-		player.set_ai_controls(controls)
+		player.set_ai_controls(build_ai_controls(player, target))
+
+func empty_ai_controls() -> Dictionary:
+	return {"left": false, "right": false, "jump": false, "down": false, "primary": false, "secondary": false, "jump_just": false, "down_just": false}
+
+func build_ai_controls(player: Node, target: Node) -> Dictionary:
+	var controls := empty_ai_controls()
+	var cooldown: int = maxi(0, int(ai_jump_cooldowns.get(player.player_index, 0)) - 1)
+	ai_jump_cooldowns[player.player_index] = cooldown
+	var current_platform: int = ai_platform_graph.nearest_platform(player.position)
+	var recovering: bool = player.position.x < 35.0 or player.position.x > 965.0 or player.position.y > 470.0
+	var destination := Vector2(500.0, 260.0)
+	var next_platform := current_platform
+
+	if recovering:
+		destination = ai_platform_graph.platform_center(current_platform) if current_platform >= 0 else Vector2(500.0, 260.0)
+	elif target != null:
+		var target_platform: int = ai_platform_graph.nearest_platform(target.position)
+		next_platform = ai_platform_graph.next_platform_toward(current_platform, target_platform)
+		destination = target.position
+		if next_platform >= 0 and next_platform != current_platform:
+			destination = ai_platform_graph.platform_center(next_platform)
+
+	var difference: Vector2 = destination - player.position
+	controls["left"] = difference.x < -20.0
+	controls["right"] = difference.x > 20.0
+	if target != null and not recovering:
+		var target_difference: Vector2 = target.position - player.position
+		controls["primary"] = absf(target_difference.y) < 95.0
+
+	var route_requires_jump := false
+	var route_requires_drop := false
+	if current_platform >= 0 and next_platform >= 0 and next_platform != current_platform:
+		var current_rect: Rect2 = ai_platform_graph.platforms[current_platform]
+		var next_rect: Rect2 = ai_platform_graph.platforms[next_platform]
+		var gap: float = ai_platform_graph.interval_gap(current_rect.position.x, current_rect.end.x, next_rect.position.x, next_rect.end.x)
+		route_requires_jump = next_rect.position.y < current_rect.position.y - 18.0 or gap > 8.0
+		route_requires_drop = next_rect.position.y > current_rect.position.y + 55.0 and gap <= 8.0
+
+	# The original game tolerates rough physics, but the AI should not simply walk
+	# off a platform unless the planned route crosses that edge.
+	if current_platform >= 0 and not recovering:
+		var platform: Rect2 = ai_platform_graph.platforms[current_platform]
+		var route_exits_left: bool = next_platform != current_platform and destination.x < player.position.x
+		var route_exits_right: bool = next_platform != current_platform and destination.x > player.position.x
+		if player.position.x <= platform.position.x + 24.0 and controls["left"] and not route_exits_left:
+			controls["left"] = false
+			controls["right"] = player.velocity.x < -1.5
+		if player.position.x >= platform.end.x - 24.0 and controls["right"] and not route_exits_right:
+			controls["right"] = false
+			controls["left"] = player.velocity.x > 1.5
+
+	var wants_jump: bool = recovering or difference.y < -32.0 or route_requires_jump
+	if wants_jump and player.jumps_remaining > 0 and cooldown == 0:
+		controls["jump"] = true
+		controls["jump_just"] = true
+		ai_jump_cooldowns[player.player_index] = 7
+	if route_requires_drop and absf(difference.x) < 55.0:
+		controls["down"] = true
+		controls["down_just"] = true
+	return controls
 
 func find_landing_y(previous: Vector2, current: Vector2) -> float:
 	for platform in platforms:

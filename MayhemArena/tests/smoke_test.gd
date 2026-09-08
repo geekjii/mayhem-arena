@@ -312,8 +312,35 @@ func _init() -> void:
 	expect(live_game.players[0].eliminated and live_game.players[2].eliminated and live_game.players[3].eliminated, "empty slots must not participate in combat")
 	live_game.free()
 
+	var ai_game := GameScript.new()
+	ai_game.ai_platform_graph.rebuild([Rect2(100, 300, 200, 20)])
+	var ai_actor := PlayerScript.new()
+	ai_actor.player_index = 0
+	ai_actor.position = Vector2(292, 300)
+	ai_actor.velocity = Vector2(4, 0)
+	ai_actor.jumps_remaining = 2
+	var same_platform_target := PlayerScript.new()
+	same_platform_target.position = Vector2(500, 300)
+	var edge_controls := ai_game.build_ai_controls(ai_actor, same_platform_target)
+	expect(not edge_controls["right"] and edge_controls["left"], "AI-3 must brake inward instead of walking off an unplanned platform edge")
+	ai_game.ai_jump_cooldowns.clear()
+	ai_actor.position = Vector2(10, 520)
+	ai_actor.velocity = Vector2(-6, 8)
+	var recovery_controls := ai_game.build_ai_controls(ai_actor, null)
+	expect(recovery_controls["right"] and recovery_controls["jump_just"], "AI-3 must prioritize steering and jumping back toward the arena when launched out")
+	ai_game.ai_jump_cooldowns.clear()
+	ai_game.ai_platform_graph.rebuild([Rect2(100, 300, 200, 20), Rect2(380, 220, 200, 20)])
+	ai_actor.position = Vector2(240, 300)
+	ai_actor.velocity = Vector2.ZERO
+	same_platform_target.position = Vector2(470, 220)
+	var route_controls := ai_game.build_ai_controls(ai_actor, same_platform_target)
+	expect(route_controls["right"] and route_controls["jump_just"], "AI-3 must jump toward the next platform selected by the route graph")
+	ai_actor.free()
+	same_platform_target.free()
+	ai_game.free()
+
 	if failures.is_empty():
-		print("SMOKE TEST PASSED: 35 Hz, four free player slots, unified AI controls, ten maps, eighteen weapons, line projectiles, delayed crate warning, combat effects, health easing, and pickup verified")
+		print("SMOKE TEST PASSED: 35 Hz, four free player slots, AI-3 movement recovery, ten maps, eighteen weapons, line projectiles, delayed crate warning, combat effects, health easing, and pickup verified")
 		quit(0)
 	else:
 		for failure in failures:

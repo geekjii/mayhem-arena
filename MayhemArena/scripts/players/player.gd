@@ -25,6 +25,7 @@ const WEAPON_VISUAL_NAMES := {
 	3: "revolver",
 	4: "bling",
 	5: "katana",
+	9: "ak",
 }
 const WEAPON_VISUAL_RANGES := {
 	1: {"primary": Vector2i(1, 11), "secondary": Vector2i(97, 126)},
@@ -32,6 +33,7 @@ const WEAPON_VISUAL_RANGES := {
 	3: {"primary": Vector2i(1, 16), "secondary": Vector2i(116, 141)},
 	4: {"primary": Vector2i(1, 9), "secondary": Vector2i(97, 127)},
 	5: {"primary": Vector2i(1, 25), "secondary": Vector2i(30, 49)},
+	9: {"primary": Vector2i(1, 32), "secondary": Vector2i(45, 68)},
 }
 # Original default-weapon reload sections inside each controller timeline.
 const WEAPON_RELOAD_RANGES := {
@@ -46,6 +48,7 @@ const WEAPON_RAW_NAMES := {
 	3: "revolver",
 	4: "bling",
 	5: "katana",
+	9: "ak",
 }
 const CRATE_ANIMATION_LENGTHS := {
 	6: 41, 7: 50, 8: 60, 9: 68, 10: 30, 11: 38, 12: 22,
@@ -57,6 +60,7 @@ const WEAPON_CANVAS_ORIGINS := {
 	3: Vector2(-16.5, -45.5),
 	4: Vector2(-16.0, -46.0),
 	5: Vector2(-35.5, -77.5),
+	9: Vector2(-36.0, -52.0),
 }
 const DEFAULT_RELOAD_FRAMES := {1: 55, 2: 56, 3: 60, 4: 55}
 
@@ -517,9 +521,53 @@ func transparent_texture(texture: Texture2D) -> Texture2D:
 				pixel.a = 0.0
 				image.set_pixel(x, y, pixel)
 	remove_edge_matte(image)
+	remove_player_color_matte(image)
 	var cleaned := ImageTexture.create_from_image(image)
 	transparent_texture_cache[cache_key] = cleaned
 	return cleaned
+
+func remove_player_color_matte(image: Image) -> void:
+	# The exported PLAYER_FULL preview can contain the player's palette color
+	# as two large disconnected backing blocks behind the body. They do not
+	# touch the image corners, so corner-only flood filling cannot remove them.
+	# Remove only large connected components of that exact palette color and
+	# keep the small colored details that belong to the character.
+	if player_color == Color.WHITE:
+		return
+	var width := image.get_width()
+	var height := image.get_height()
+	var visited := PackedByteArray()
+	visited.resize(width * height)
+	for y in height:
+		for x in width:
+			var offset := y * width + x
+			if visited[offset] != 0:
+				continue
+			var first := image.get_pixel(x, y)
+			if first.a < 0.5 or color_distance(first, player_color) > 0.14:
+				continue
+			var queue: Array[Vector2i] = [Vector2i(x, y)]
+			var component: Array[Vector2i] = []
+			visited[offset] = 1
+			while not queue.is_empty():
+				var cell: Vector2i = queue.pop_front()
+				component.append(cell)
+				for neighbor in [Vector2i(cell.x - 1, cell.y), Vector2i(cell.x + 1, cell.y), Vector2i(cell.x, cell.y - 1), Vector2i(cell.x, cell.y + 1)]:
+					if neighbor.x < 0 or neighbor.x >= width or neighbor.y < 0 or neighbor.y >= height:
+						continue
+					var neighbor_offset: int = neighbor.y * width + neighbor.x
+					if visited[neighbor_offset] != 0:
+						continue
+					var pixel := image.get_pixelv(neighbor)
+					if pixel.a >= 0.5 and color_distance(pixel, player_color) <= 0.14:
+						visited[neighbor_offset] = 1
+						queue.append(neighbor)
+			if component.size() < 20:
+				continue
+			for cell in component:
+				var pixel := image.get_pixelv(cell)
+				pixel.a = 0.0
+				image.set_pixelv(cell, pixel)
 
 func remove_edge_matte(image: Image) -> void:
 	var width := image.get_width()
@@ -606,7 +654,11 @@ func load_and_cache_weapon_frame(requested_weapon_id: int, action: String, frame
 		return visual_frame_cache[cache_key]
 	var weapon_name: String = WEAPON_RAW_NAMES[requested_weapon_id]
 	var path: String
-	if action == "reload":
+	if requested_weapon_id == 9:
+		# The reverse-engineered AK controller exports one shared 68-frame
+		# weapon layer; its primary and stock-strike ranges are selected above.
+		path = "res://assets/original_reference/player_layers/raw/%s/%d.png" % [weapon_name, frame]
+	elif action == "reload":
 		path = "res://assets/original_reference/player_layers/raw/%s/%d.png" % [weapon_name, frame]
 	else:
 		path = "res://assets/original_reference/player_layers/weapons/%s/%s/%d.png" % [weapon_name, action, frame]
@@ -628,15 +680,15 @@ func _draw() -> void:
 		return
 	draw_ellipse_shadow()
 	var animated_weapon := weapon_frame_texture()
-	if weapon_id >= 6:
-		draw_pickup_player()
-	elif animated_weapon != null:
+	if animated_weapon != null:
 		draw_layered_player(animated_weapon)
+	elif weapon_id >= 6:
+		draw_pickup_player()
 	else:
 		draw_idle_player()
-	if weapon_id >= 6:
+	if weapon_id >= 6 and animated_weapon == null:
 		draw_pickup_weapon()
-	elif muzzle_flash_frames > 0 and weapon_id != 5:
+	if muzzle_flash_frames > 0 and weapon_id != 5:
 		draw_muzzle_flash()
 	if reload_frames > 0:
 		draw_arc(Vector2(0, -57), 8, -PI * 0.5, -PI * 0.5 + TAU * (1.0 - float(reload_frames) / reload_total_frames), 12, Color.WHITE, 2.0)
@@ -681,7 +733,9 @@ func visual_modulate() -> Color:
 
 func draw_pickup_weapon() -> void:
 	var kick := float(weapon_kick_frames) * 1.3
-	var action_progress := clampf(float(visual_frame) / 12.0, 0.0, 1.0) if visual_action_active else 0.0
+	var action_progress := 0.0
+	if visual_action_active:
+		action_progress = clampf(float(visual_frame - 1) / maxf(float(visual_frame_end - 1), 1.0), 0.0, 1.0)
 	var attack_lift := -sin(action_progress * PI) * 7.0
 	var start := Vector2((7.0 - kick) * facing, -25 + attack_lift)
 	var end := Vector2((25.0 - kick) * facing, -25 + attack_lift)
@@ -728,9 +782,6 @@ func draw_pickup_weapon() -> void:
 		18:
 			draw_circle(end + Vector2(6 * facing, 0), 8.0, Color("282b31"))
 			draw_circle(end + Vector2(9 * facing, -3), 2.0, Color("ffb000"))
-	if muzzle_flash_frames > 0:
-		draw_muzzle_flash()
-
 func draw_muzzle_flash() -> void:
 	var muzzle := muzzle_position() - position
 	var alpha := float(muzzle_flash_frames) / 3.0

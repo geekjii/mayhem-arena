@@ -101,6 +101,23 @@ func _init() -> void:
 	expect(player.ammo == 4, "multi-projectile attacks must consume their original shell count")
 	player.start_reload()
 	expect(player.reload_frames == 12, "empty crate weapons must be discarded quickly instead of reloading")
+	player.equip_weapon(9, false)
+	player.start_weapon_visual("primary")
+	expect(player.visual_frame == 1 and player.visual_frame_end == 32, "AK primary attack must use the extracted 32-frame timeline")
+	expect(player.weapon_frame_texture() != null, "AK primary attack must load the extracted raw weapon layer")
+	player.process_visual_animation()
+	expect(player.visual_frame == 2, "AK raw animation must advance one frame per 35 Hz tick")
+	var visual_player := PlayerScript.new()
+	visual_player.setup(null, 0, Vector2.ZERO, Color("0099ff"), 1)
+	var cleaned_preview := visual_player.texture_for_weapon(1).get_image()
+	var opaque_palette_pixels := 0
+	for pixel_y in cleaned_preview.get_height():
+		for pixel_x in cleaned_preview.get_width():
+			var pixel := cleaned_preview.get_pixel(pixel_x, pixel_y)
+			if pixel.a > 0.9 and visual_player.color_distance(pixel, Color("0099ff")) < 0.14:
+				opaque_palette_pixels += 1
+	expect(opaque_palette_pixels < 20, "player preview must remove the large palette-color backing blocks")
+	visual_player.free()
 	player.lives = 2
 	player.lose_life()
 	expect(player.lives == 1 and near(player.position.y, -500.0), "surviving players must respawn from Redux's original off-screen height")

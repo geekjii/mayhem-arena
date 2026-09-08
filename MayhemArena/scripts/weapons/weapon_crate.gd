@@ -2,6 +2,16 @@ extends Node2D
 
 const WeaponCatalog = preload("res://scripts/weapons/weapon_catalog.gd")
 const CrateTexture = preload("res://assets/original_reference/props/crate.png")
+const CrateTimeline := [
+	preload("res://assets/original_reference/props/crate_timeline/1.png"),
+	preload("res://assets/original_reference/props/crate_timeline/2.png"),
+	preload("res://assets/original_reference/props/crate_timeline/3.png"),
+	preload("res://assets/original_reference/props/crate_timeline/4.png"),
+	preload("res://assets/original_reference/props/crate_timeline/5.png"),
+	preload("res://assets/original_reference/props/crate_timeline/6.png"),
+	preload("res://assets/original_reference/props/crate_timeline/7.png"),
+	preload("res://assets/original_reference/props/crate_timeline/8.png"),
+]
 
 var arena: Node
 var weapon_id := 1
@@ -9,6 +19,7 @@ var velocity := Vector2.ZERO
 var landed := false
 var pickup_lock_frames := 14
 var age_frames := 0
+var animation_frame := 0
 
 func setup(game: Node, at_position: Vector2, contained_weapon_id: int) -> void:
 	arena = game
@@ -22,6 +33,7 @@ func _physics_process(_delta: float) -> void:
 	if not arena.round_started or arena.match_over:
 		return
 	age_frames += 1
+	animation_frame = wrapi(animation_frame + 1, 0, CrateTimeline.size())
 	pickup_lock_frames = maxi(0, pickup_lock_frames - 1)
 
 	if not landed:
@@ -53,4 +65,5 @@ func _physics_process(_delta: float) -> void:
 func _draw() -> void:
 	var bob := sin(age_frames * 0.22) * 1.5 if landed else 0.0
 	var target_size := Vector2(51, 42)
-	draw_texture_rect(CrateTexture, Rect2(-target_size.x * 0.5, -target_size.y + bob, target_size.x, target_size.y), false)
+	var texture: Texture2D = CrateTimeline[animation_frame] if not CrateTimeline.is_empty() else CrateTexture
+	draw_texture_rect(texture, Rect2(-target_size.x * 0.5, -target_size.y + bob, target_size.x, target_size.y), false)

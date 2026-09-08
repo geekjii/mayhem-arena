@@ -1,5 +1,7 @@
 extends Node2D
 
+const FontCatalog = preload("res://scripts/ui/font_catalog.gd")
+
 var target: Node
 var panel_position := Vector2.ZERO
 var panel_color := Color.WHITE
@@ -38,7 +40,7 @@ func _physics_process(_delta: float) -> void:
 func _draw() -> void:
 	if not is_instance_valid(target):
 		return
-	var font := ThemeDB.fallback_font
+	var font := FontCatalog.ui_font()
 	var panel := Rect2(0, 0, 300, 50)
 	draw_rect(panel, Color("f4f4ef"), true)
 	draw_rect(panel, Color("171a1c"), false, 3.0)

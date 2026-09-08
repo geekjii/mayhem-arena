@@ -15,6 +15,21 @@ const MAP_TEXTURES := {
 	10: preload("res://assets/original_reference/maps/redux_map_10.png"),
 }
 
+# The painted stage is a three-layer movie clip in the original SWF. The
+# existing redux_map_## images remain the stable menu preview, while gameplay
+# composites these source layers so the original ten-frame background motion is
+# visible without changing collision coordinates.
+const SCENE_LAYER_PATHS := {
+	"scene1": "res://assets/original_reference/map_layers/scene1/%d.png",
+	"scene2": "res://assets/original_reference/map_layers/scene2/%d.png",
+	"scene3": "res://assets/original_reference/map_layers/scene3/%d.png",
+}
+const SCENE_LAYER_ORIGINS := {
+	"scene1": Vector2(173, 57),
+	"scene2": Vector2(381, 157),
+	"scene3": Vector2(485, 160),
+}
+
 # The first map was hand-aligned to its painted ledges. Maps 2-10 are traced
 # from the black platform shapes in symbol 1163. Their exported collision layer
 # sits 12 pixels above scene3, so platforms_for() applies that visual correction.
@@ -101,6 +116,16 @@ const SPAWN_SETS := {
 
 static func texture_for(map_id: int) -> Texture2D:
 	return MAP_TEXTURES.get(map_id, MAP_TEXTURES[1])
+
+static func scene_layer_for(layer_name: String, frame: int) -> Texture2D:
+	var path_template: String = SCENE_LAYER_PATHS.get(layer_name, "")
+	if path_template.is_empty():
+		return null
+	var normalized_frame := posmod(frame, 10) + 1
+	return ResourceLoader.load(path_template % normalized_frame) as Texture2D
+
+static func scene_layer_origin(layer_name: String) -> Vector2:
+	return SCENE_LAYER_ORIGINS.get(layer_name, Vector2.ZERO)
 
 static func platforms_for(map_id: int) -> Array[Rect2]:
 	var result: Array[Rect2] = []

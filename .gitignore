@@ -8,6 +8,7 @@
 /tools/godot/
 /MayhemArena/.godot/
 /MayhemArena/builds/
+/MayhemArena/assets/fonts/*.import
 
 # Private reverse-engineering references; never commit or distribute
 /reference/original/

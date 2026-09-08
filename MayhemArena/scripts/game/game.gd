@@ -6,6 +6,7 @@ const WeaponCrateScript = preload("res://scripts/weapons/weapon_crate.gd")
 const HudScript = preload("res://scripts/ui/player_hud.gd")
 const WeaponCatalog = preload("res://scripts/weapons/weapon_catalog.gd")
 const MapCatalog = preload("res://scripts/game/map_catalog.gd")
+const FontCatalog = preload("res://scripts/ui/font_catalog.gd")
 const StunTexture = preload("res://assets/original_reference/effects/status/stun.png")
 const CrateOpen1Texture = preload("res://assets/original_reference/effects/crate/open1/1.png")
 const CrateOpen2Texture = preload("res://assets/original_reference/effects/crate/open2/1.png")
@@ -97,6 +98,7 @@ const DeathWaveTextures := [
 var selected_map := 1
 var map_texture: Texture2D = MapCatalog.texture_for(1)
 var platforms: Array[Rect2] = MapCatalog.platforms_for(1)
+var map_animation_frame := 0
 var players: Array[Node] = []
 var huds: Array[Node] = []
 var match_over := false
@@ -190,6 +192,7 @@ func _physics_process(_delta: float) -> void:
 		process_selection_input()
 		queue_redraw()
 		return
+	map_animation_frame = wrapi(map_animation_frame + 1, 0, 10)
 
 	if Input.is_action_just_pressed("back_to_menu"):
 		enter_selection_screen()
@@ -662,6 +665,7 @@ func start_round() -> void:
 	effects.clear()
 	clear_weapon_crate()
 	crate_spawn_frames = 105
+	map_animation_frame = 0
 	for index in players.size():
 		players[index].set_perk(player_slot_perks[index])
 		players[index].set_weapon(selected_weapons[index])
@@ -820,6 +824,9 @@ func melee_attack(
 
 func spawn_hit_effect(at_position: Vector2, color: Color) -> void:
 	effects.append({"type": "hit", "position": at_position, "color": color, "life": 7})
+	# The original hit path reuses the small expanding wave used by the crate
+	# and explosion feedback. Keep the text/spark layer as a readable supplement.
+	effects.append({"type": "small_wave", "position": at_position, "scale": 0.1, "life": 15})
 
 func play_random_sound(sound_pool: Array, volume_db: float = 0.0) -> void:
 	if sound_pool.is_empty() or not is_inside_tree():
@@ -1002,6 +1009,7 @@ func on_weapon_crate_picked(crate: Node, player: Node, weapon_id: int) -> void:
 		"label": WeaponCatalog.weapon_name_for(weapon_id),
 		"life": 35,
 	})
+	spawn_small_wave(player.position + Vector2(0, -24))
 
 func on_pickup_weapon_empty(player: Node, weapon_id: int) -> void:
 	effects.append({
@@ -1047,9 +1055,9 @@ func reset_match() -> void:
 
 func _draw() -> void:
 	draw_rect(Rect2(0, 0, 1000, 560), Color.BLACK, true)
-	draw_texture(map_texture, Vector2.ZERO)
+	draw_map_scene()
 
-	var font := ThemeDB.fallback_font
+	var font := FontCatalog.ui_font()
 	if not round_started:
 		if menu_screen == MenuScreen.MAIN:
 			draw_main_menu(font)
@@ -1330,6 +1338,29 @@ func draw_map_selection(font: Font) -> void:
 	draw_string(font, Vector2(252, 523), menu_text("CONTINUE", "继续"), HORIZONTAL_ALIGNMENT_LEFT, 680, 22, Color.WHITE)
 	draw_string(font, Vector2(30, 550), menu_text("↑ ↓ SELECT MAP    Z CONTINUE    X / ESC BACK", "↑ ↓ 选择地图    Z 继续    X / ESC 返回"), HORIZONTAL_ALIGNMENT_LEFT, 760, 12, Color("e6e6e6"))
 
+func draw_map_scene() -> void:
+	if not round_started:
+		draw_texture(map_texture, Vector2.ZERO)
+		return
+	var frame := map_animation_frame
+	var background := MapCatalog.scene_layer_for("scene1", frame)
+	var decorations := MapCatalog.scene_layer_for("scene2", frame)
+	var platforms_layer := MapCatalog.scene_layer_for("scene3", frame)
+	if background == null or decorations == null or platforms_layer == null:
+		draw_texture(map_texture, Vector2.ZERO)
+		return
+	draw_scene_layer(background, MapCatalog.scene_layer_origin("scene1"))
+	draw_scene_layer(decorations, MapCatalog.scene_layer_origin("scene2"))
+	draw_scene_layer(platforms_layer, MapCatalog.scene_layer_origin("scene3"))
+
+func draw_scene_layer(texture: Texture2D, source_origin: Vector2) -> void:
+	draw_texture_rect_region(
+		texture,
+		Rect2(Vector2.ZERO, Vector2(1000, 560)),
+		Rect2(source_origin, Vector2(1000, 560)),
+		Color.WHITE
+	)
+
 func draw_player_setup(font: Font) -> void:
 	draw_striped_menu_background()
 	draw_menu_header(font, menu_text("CUSTOM GAME", "自定义游戏"))
@@ -1523,4 +1554,4 @@ func draw_perk_icon(center: Vector2, perk_id: int, scale_value: float) -> void:
 	draw_colored_polygon(points, colors[clampi(perk_id, 0, colors.size() - 1)])
 	draw_polyline(points + PackedVector2Array([points[0]]), Color("101010"), 3.0 * scale_value)
 	var labels := ["NO", "3X", "R", "AM", "?", "∞"]
-	draw_string(ThemeDB.fallback_font, center + Vector2(-21, 6) * scale_value, labels[clampi(perk_id, 0, labels.size() - 1)], HORIZONTAL_ALIGNMENT_CENTER, 42 * scale_value, 16 * scale_value, Color("111111"))
+	draw_string(FontCatalog.ui_font(), center + Vector2(-21, 6) * scale_value, labels[clampi(perk_id, 0, labels.size() - 1)], HORIZONTAL_ALIGNMENT_CENTER, 42 * scale_value, 16 * scale_value, Color("111111"))

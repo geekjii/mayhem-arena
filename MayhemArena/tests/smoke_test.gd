@@ -5,6 +5,7 @@ const MapCatalog = preload("res://scripts/game/map_catalog.gd")
 const GameScript = preload("res://scripts/game/game.gd")
 const PlayerScript = preload("res://scripts/players/player.gd")
 const WeaponCrateScript = preload("res://scripts/weapons/weapon_crate.gd")
+const FontCatalog = preload("res://scripts/ui/font_catalog.gd")
 
 var failures: Array[String] = []
 
@@ -18,6 +19,7 @@ func near(actual: float, expected: float, tolerance := 0.001) -> bool:
 func _init() -> void:
 	expect(Engine.physics_ticks_per_second == 35, "physics tick rate must be 35 Hz")
 	expect(Engine.max_fps == 35, "render cap must be 35 FPS")
+	expect(FontCatalog.supports_required_glyphs(), "project UI font must contain the required Chinese glyphs")
 	expect(WeaponCatalog.DEFAULT_WEAPON_IDS.size() == 5, "the selectable default pool must contain five weapons")
 	expect(WeaponCatalog.CRATE_WEAPON_IDS.size() == 13, "the complete crate weapon pool must contain thirteen weapons")
 	expect(WeaponCatalog.WEAPONS.size() == 18, "the catalog must contain five default and thirteen crate weapons")
@@ -79,7 +81,7 @@ func _init() -> void:
 	expect(random_spawn_weapon in WeaponCatalog.CRATE_WEAPON_IDS, "Random Weapon perk must select from the crate weapon pool")
 	player.set_perk(0)
 	player.set_weapon(1)
-	expect(player.visual_frame_cache.size() == 41, "Sand Hawk's 11 primary and 30 secondary frames must preload")
+	expect(player.visual_frame_cache.size() == 77, "Sand Hawk's attack and reload frames must preload")
 	player.start_weapon_visual("primary")
 	expect(player.visual_action_active and player.visual_frame == 1 and player.visual_frame_end == 11, "Sand Hawk primary timeline must start at frame 1 and end at frame 11")
 	expect(player.weapon_frame_texture() != null, "the first Sand Hawk action frame must load")
@@ -87,7 +89,7 @@ func _init() -> void:
 	expect(player.visual_frame == 2, "weapon animation must advance exactly one original frame per 35 Hz tick")
 	player.start_reload()
 	expect(player.reload_frames == 55, "Sand Hawk reload must retain the original 55-frame sequence")
-	expect(not player.visual_action_active and player.visual_frame == 0, "reload must interrupt the previous attack visual timeline")
+	expect(player.visual_action_active and player.visual_action == "reload" and player.visual_frame == 58, "reload must switch to the original reload visual timeline")
 	player.equip_weapon(6, false)
 	expect(player.default_weapon_id == 1, "crate pickup must not replace the selected respawn weapon")
 	expect(player.weapon_id == 6 and player.ammo == 6, "crate pickup must equip and refill the contained weapon")

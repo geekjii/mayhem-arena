@@ -33,6 +33,24 @@ const WEAPON_VISUAL_RANGES := {
 	4: {"primary": Vector2i(1, 9), "secondary": Vector2i(97, 127)},
 	5: {"primary": Vector2i(1, 25), "secondary": Vector2i(30, 49)},
 }
+# Original default-weapon reload sections inside each controller timeline.
+const WEAPON_RELOAD_RANGES := {
+	1: Vector2i(58, 93),
+	2: Vector2i(79, 120),
+	3: Vector2i(63, 105),
+	4: Vector2i(58, 93),
+}
+const WEAPON_RAW_NAMES := {
+	1: "deagle",
+	2: "dual",
+	3: "revolver",
+	4: "bling",
+	5: "katana",
+}
+const CRATE_ANIMATION_LENGTHS := {
+	6: 41, 7: 50, 8: 60, 9: 68, 10: 30, 11: 38, 12: 22,
+	13: 50, 14: 50, 15: 46, 16: 42, 17: 30, 18: 32,
+}
 const WEAPON_CANVAS_ORIGINS := {
 	1: Vector2(-33.0, -49.0),
 	2: Vector2(-23.0, -42.0),
@@ -399,10 +417,18 @@ func start_reload() -> void:
 		return
 	reload_total_frames = 12 if weapon_id != default_weapon_id else int(DEFAULT_RELOAD_FRAMES.get(weapon_id, 45))
 	reload_frames = reload_total_frames
-	visual_action_active = false
-	visual_action = ""
-	visual_frame = 0
-	visual_frame_end = 0
+	if WEAPON_RELOAD_RANGES.has(weapon_id):
+		var frame_range: Vector2i = WEAPON_RELOAD_RANGES[weapon_id]
+		visual_action = "reload"
+		visual_frame = frame_range.x
+		visual_frame_end = frame_range.y
+		visual_action_active = true
+		notify_weapon_visual_frame()
+	else:
+		visual_action_active = false
+		visual_action = ""
+		visual_frame = 0
+		visual_frame_end = 0
 	queue_redraw()
 
 func take_damage(damage: float, horizontal_impulse: float, stun: int, attacker: Node) -> void:
@@ -480,17 +506,64 @@ func transparent_texture(texture: Texture2D) -> Texture2D:
 	var image := texture.get_image()
 	if image == null:
 		return texture
-	# The SWF exporter leaves a very faint black matte on some transparent
-	# edges. Remove only near-transparent pixels so the solid outline remains.
+	# The SWF exporter can leave both a faint matte and a solid, edge-connected
+	# background on a few symbols. Remove the matte first, then flood-fill only
+	# a border-connected color that matches the image corners. This preserves
+	# interior black outlines while removing the rectangular color block.
 	for y in image.get_height():
 		for x in image.get_width():
 			var pixel := image.get_pixel(x, y)
-			if pixel.a < 0.14:
+			if pixel.a < 0.5:
 				pixel.a = 0.0
 				image.set_pixel(x, y, pixel)
+	remove_edge_matte(image)
 	var cleaned := ImageTexture.create_from_image(image)
 	transparent_texture_cache[cache_key] = cleaned
 	return cleaned
+
+func remove_edge_matte(image: Image) -> void:
+	var width := image.get_width()
+	var height := image.get_height()
+	if width < 3 or height < 3:
+		return
+	var corner_colors := [
+		image.get_pixel(0, 0), image.get_pixel(width - 1, 0),
+		image.get_pixel(0, height - 1), image.get_pixel(width - 1, height - 1),
+	]
+	var reference: Color = corner_colors[0]
+	var matching_corners := 0
+	for corner in corner_colors:
+		if corner.a > 0.95 and color_distance(reference, corner) < 0.12:
+			matching_corners += 1
+	if matching_corners < 3:
+		return
+
+	var visited := PackedByteArray()
+	visited.resize(width * height)
+	var queue: Array[Vector2i] = []
+	for x in width:
+		queue.append(Vector2i(x, 0))
+		queue.append(Vector2i(x, height - 1))
+	for y in range(1, height - 1):
+		queue.append(Vector2i(0, y))
+		queue.append(Vector2i(width - 1, y))
+	while not queue.is_empty():
+		var cell: Vector2i = queue.pop_front()
+		var offset := cell.y * width + cell.x
+		if visited[offset] != 0:
+			continue
+		visited[offset] = 1
+		var pixel := image.get_pixelv(cell)
+		if pixel.a <= 0.0 or color_distance(pixel, reference) > 0.18:
+			continue
+		pixel.a = 0.0
+		image.set_pixelv(cell, pixel)
+		for neighbor in [Vector2i(cell.x - 1, cell.y), Vector2i(cell.x + 1, cell.y), Vector2i(cell.x, cell.y - 1), Vector2i(cell.x, cell.y + 1)]:
+			if neighbor.x >= 0 and neighbor.x < width and neighbor.y >= 0 and neighbor.y < height:
+				queue.append(neighbor)
+
+func color_distance(first: Color, second: Color) -> float:
+	return absf(first.r - second.r) + absf(first.g - second.g) + absf(first.b - second.b) + absf(first.a - second.a)
 
 func base_texture_for_display() -> Texture2D:
 	return transparent_texture(P1_BASE_TEXTURE if player_index == 0 else P2_BASE_TEXTURE)
@@ -499,7 +572,7 @@ func start_weapon_visual(action: String) -> void:
 	if not WEAPON_VISUAL_RANGES.has(weapon_id):
 		visual_action = action
 		visual_frame = 1
-		visual_frame_end = 12
+		visual_frame_end = int(CRATE_ANIMATION_LENGTHS.get(weapon_id, 12))
 		visual_action_active = true
 		notify_weapon_visual_frame()
 		return
@@ -518,17 +591,29 @@ func notify_weapon_visual_frame() -> void:
 func precache_weapon_visuals(requested_weapon_id: int) -> void:
 	if not WEAPON_VISUAL_RANGES.has(requested_weapon_id):
 		return
-	var weapon_name: String = WEAPON_VISUAL_NAMES[requested_weapon_id]
 	for action in ["primary", "secondary"]:
 		var frame_range: Vector2i = WEAPON_VISUAL_RANGES[requested_weapon_id][action]
 		for frame in range(frame_range.x, frame_range.y + 1):
-			var cache_key := "%d:%s:%d" % [requested_weapon_id, action, frame]
-			if visual_frame_cache.has(cache_key):
-				continue
-			var path := "res://assets/original_reference/player_layers/weapons/%s/%s/%d.png" % [weapon_name, action, frame]
-			var texture := ResourceLoader.load(path) as Texture2D
-			if texture != null:
-				visual_frame_cache[cache_key] = texture
+			load_and_cache_weapon_frame(requested_weapon_id, action, frame)
+	if WEAPON_RELOAD_RANGES.has(requested_weapon_id):
+		var reload_range: Vector2i = WEAPON_RELOAD_RANGES[requested_weapon_id]
+		for frame in range(reload_range.x, reload_range.y + 1):
+			load_and_cache_weapon_frame(requested_weapon_id, "reload", frame)
+
+func load_and_cache_weapon_frame(requested_weapon_id: int, action: String, frame: int) -> Texture2D:
+	var cache_key := "%d:%s:%d" % [requested_weapon_id, action, frame]
+	if visual_frame_cache.has(cache_key):
+		return visual_frame_cache[cache_key]
+	var weapon_name: String = WEAPON_RAW_NAMES[requested_weapon_id]
+	var path: String
+	if action == "reload":
+		path = "res://assets/original_reference/player_layers/raw/%s/%d.png" % [weapon_name, frame]
+	else:
+		path = "res://assets/original_reference/player_layers/weapons/%s/%s/%d.png" % [weapon_name, action, frame]
+	var texture := ResourceLoader.load(path) as Texture2D
+	if texture != null:
+		visual_frame_cache[cache_key] = transparent_texture(texture)
+	return texture
 
 func weapon_frame_texture() -> Texture2D:
 	if not visual_action_active or not WEAPON_VISUAL_NAMES.has(weapon_id):
@@ -536,18 +621,13 @@ func weapon_frame_texture() -> Texture2D:
 	var cache_key := "%d:%s:%d" % [weapon_id, visual_action, visual_frame]
 	if visual_frame_cache.has(cache_key):
 		return visual_frame_cache[cache_key]
-	var weapon_name: String = WEAPON_VISUAL_NAMES[weapon_id]
-	var path := "res://assets/original_reference/player_layers/weapons/%s/%s/%d.png" % [weapon_name, visual_action, visual_frame]
-	var texture := ResourceLoader.load(path) as Texture2D
-	if texture != null:
-		visual_frame_cache[cache_key] = texture
-	return texture
+	return load_and_cache_weapon_frame(weapon_id, visual_action, visual_frame)
 
 func _draw() -> void:
 	if eliminated:
 		return
 	draw_ellipse_shadow()
-	var animated_weapon := null if reload_frames > 0 else weapon_frame_texture()
+	var animated_weapon := weapon_frame_texture()
 	if weapon_id >= 6:
 		draw_pickup_player()
 	elif animated_weapon != null:
@@ -557,9 +637,7 @@ func _draw() -> void:
 	if weapon_id >= 6:
 		draw_pickup_weapon()
 	elif muzzle_flash_frames > 0 and weapon_id != 5:
-		var muzzle := muzzle_position() - position - Vector2(5 * facing, 0)
-		var flash_size := 5.0 + muzzle_flash_frames * 2.0
-		draw_circle(muzzle, flash_size, Color(1.0, 0.82, 0.25, muzzle_flash_frames / 3.0))
+		draw_muzzle_flash()
 	if reload_frames > 0:
 		draw_arc(Vector2(0, -57), 8, -PI * 0.5, -PI * 0.5 + TAU * (1.0 - float(reload_frames) / reload_total_frames), 12, Color.WHITE, 2.0)
 	if hit_flash_frames > 0:
@@ -651,9 +729,17 @@ func draw_pickup_weapon() -> void:
 			draw_circle(end + Vector2(6 * facing, 0), 8.0, Color("282b31"))
 			draw_circle(end + Vector2(9 * facing, -3), 2.0, Color("ffb000"))
 	if muzzle_flash_frames > 0:
-		var muzzle := muzzle_position() - position - Vector2(5 * facing, 0)
-		var flash_size := 5.0 + muzzle_flash_frames * 2.0
-		draw_circle(muzzle, flash_size, Color(1.0, 0.82, 0.25, muzzle_flash_frames / 3.0))
+		draw_muzzle_flash()
+
+func draw_muzzle_flash() -> void:
+	var muzzle := muzzle_position() - position
+	var alpha := float(muzzle_flash_frames) / 3.0
+	var length := 10.0 + float(muzzle_flash_frames) * 3.0
+	var tip := muzzle + Vector2(length * facing, 0)
+	var upper := muzzle + Vector2(2.0 * facing, -5.0 - muzzle_flash_frames)
+	var lower := muzzle + Vector2(2.0 * facing, 5.0 + muzzle_flash_frames)
+	draw_colored_polygon(PackedVector2Array([muzzle, upper, tip, lower]), Color(1.0, 0.72, 0.12, alpha))
+	draw_circle(muzzle, 3.0 + muzzle_flash_frames, Color(1.0, 0.95, 0.62, alpha))
 
 func draw_ellipse_shadow() -> void:
 	draw_set_transform(Vector2(0, 2), 0.0, Vector2(1.0, 0.32))

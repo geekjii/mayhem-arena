@@ -1,0 +1,14 @@
+# macOS and local logs
+.DS_Store
+**/.DS_Store
+/logs/
+*.log
+
+# Local development tools and Godot-generated state
+/tools/godot/
+/MayhemArena/.godot/
+/MayhemArena/builds/
+
+# Private reverse-engineering references; never commit or distribute
+/reference/original/
+/MayhemArena/assets/original_reference/

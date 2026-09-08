@@ -1,0 +1,35 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=5
+
+[application]
+
+config/name="Mayhem Arena"
+run/main_scene="res://scenes/game/main.tscn"
+config/features=PackedStringArray("4.7")
+run/max_fps=35
+
+[display]
+
+window/size/viewport_width=1000
+window/size/viewport_height=560
+window/size/window_width_override=1000
+window/size/window_height_override=560
+window/stretch/mode="canvas_items"
+window/vsync/vsync_mode=0
+
+[physics]
+
+common/physics_ticks_per_second=35
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+environment/defaults/default_clear_color=Color(0.035, 0.045, 0.065, 1)

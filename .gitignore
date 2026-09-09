@@ -10,6 +10,7 @@
 /MayhemArena/builds/
 /MayhemArena/assets/fonts/*.import
 
-# Private reverse-engineering references; never commit or distribute
+# Raw reverse-engineering inputs remain local. The edited runtime artwork and
+# audio under assets/original_reference are tracked so a clone can run.
 /reference/original/
-/MayhemArena/assets/original_reference/
+/MayhemArena/assets/original_reference/**/*.import

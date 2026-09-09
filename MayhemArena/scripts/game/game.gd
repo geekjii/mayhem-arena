@@ -8,6 +8,7 @@ const WeaponCatalog = preload("res://scripts/weapons/weapon_catalog.gd")
 const MapCatalog = preload("res://scripts/game/map_catalog.gd")
 const FontCatalog = preload("res://scripts/ui/font_catalog.gd")
 const PlatformGraphScript = preload("res://scripts/ai/platform_graph.gd")
+const TestWeaponOverlayScript = preload("res://scripts/ui/test_weapon_overlay.gd")
 const StunTexture = preload("res://assets/original_reference/effects/status/stun.png")
 const CrateOpen1Texture = preload("res://assets/original_reference/effects/crate/open1/1.png")
 const CrateOpen2Texture = preload("res://assets/original_reference/effects/crate/open2/1.png")
@@ -133,11 +134,15 @@ var menu_hover_pulse := 0.0
 var match_participant_count := 0
 var ai_jump_cooldowns: Dictionary = {}
 var ai_platform_graph = PlatformGraphScript.new()
+var test_weapon_overlay: Node
 
 func _ready() -> void:
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	configure_input()
 	create_players()
+	test_weapon_overlay = TestWeaponOverlayScript.new()
+	add_child(test_weapon_overlay)
+	test_weapon_overlay.setup(self)
 	ai_platform_graph.rebuild(platforms)
 	enter_selection_screen()
 	queue_redraw()
@@ -179,7 +184,14 @@ func configure_input() -> void:
 			InputMap.action_add_event(action, event)
 
 func _input(event: InputEvent) -> void:
-	if round_started or input_lock_frames > 0:
+	if input_lock_frames > 0:
+		return
+	if round_started:
+		if event is InputEventMouseMotion:
+			test_weapon_overlay.set_mouse_position(event.position)
+		elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+			if test_weapon_overlay.handle_click(event.position):
+				play_ui_sound()
 		return
 	if event is InputEventMouseMotion:
 		menu_mouse_position = event.position
@@ -200,13 +212,15 @@ func _physics_process(_delta: float) -> void:
 		queue_redraw()
 		return
 	if Input.is_action_just_pressed("back_to_menu"):
-		enter_selection_screen()
+		exit_round_to_map_selection()
 		return
 	if match_over and Input.is_action_just_pressed("restart"):
 		reset_match()
 	if not match_over:
 		update_ai_controls()
 		process_weapon_crate_spawning()
+	if is_instance_valid(test_weapon_overlay):
+		test_weapon_overlay.tick()
 
 	for index in range(effects.size() - 1, -1, -1):
 		update_effect(index)
@@ -597,6 +611,28 @@ func enter_selection_screen() -> void:
 	input_lock_frames = 2
 	effects.clear()
 	clear_weapon_crate()
+	if is_instance_valid(test_weapon_overlay):
+		test_weapon_overlay.reset()
+	for player in players:
+		player.visible = false
+	for hud in huds:
+		hud.visible = false
+	queue_redraw()
+
+func exit_round_to_map_selection() -> void:
+	round_started = false
+	match_over = false
+	winner_text = ""
+	menu_screen = MenuScreen.MAP_SELECTION
+	map_menu_cursor = selected_map
+	players_ready = [false, false, false, false]
+	input_lock_frames = 2
+	effects.clear()
+	clear_weapon_crate()
+	screen_shake_frames = 0
+	position = Vector2.ZERO
+	if is_instance_valid(test_weapon_overlay):
+		test_weapon_overlay.reset()
 	for player in players:
 		player.visible = false
 	for hud in huds:
@@ -676,6 +712,8 @@ func start_round() -> void:
 	input_lock_frames = 2
 	effects.clear()
 	clear_weapon_crate()
+	if is_instance_valid(test_weapon_overlay):
+		test_weapon_overlay.reset()
 	crate_spawn_frames = 105
 	match_participant_count = 0
 	ai_platform_graph.rebuild(platforms)
@@ -694,6 +732,16 @@ func start_round() -> void:
 		if active:
 			match_participant_count += 1
 	queue_redraw()
+
+func assign_test_weapon_to_player2(weapon_id: int) -> bool:
+	if weapon_id not in WeaponCatalog.CRATE_WEAPON_IDS or players.size() < 2:
+		return false
+	if player_slot_types[1] == SlotType.EMPTY or players[1].eliminated:
+		return false
+	# Keep Player 2's configured default weapon intact. When test ammo runs out,
+	# the existing crate-weapon flow restores that default as usual.
+	players[1].equip_weapon(weapon_id, false)
+	return true
 
 func update_ai_controls() -> void:
 	for player in players:
@@ -718,7 +766,9 @@ func build_ai_controls(player: Node, target: Node) -> Dictionary:
 	var cooldown: int = maxi(0, int(ai_jump_cooldowns.get(player.player_index, 0)) - 1)
 	ai_jump_cooldowns[player.player_index] = cooldown
 	var current_platform: int = ai_platform_graph.nearest_platform(player.position)
-	var recovering: bool = player.position.x < 35.0 or player.position.x > 965.0 or player.position.y > 470.0
+	# Map 6 has a legitimate floor near y=501. Recovery must begin below that
+	# floor, not merely in the lower part of the screen, or the AI jump-loops.
+	var recovering: bool = player.position.x < 35.0 or player.position.x > 965.0 or player.position.y > 510.0
 	var destination := Vector2(500.0, 260.0)
 	var next_platform := current_platform
 
@@ -760,11 +810,33 @@ func build_ai_controls(player: Node, target: Node) -> Dictionary:
 			controls["right"] = false
 			controls["left"] = player.velocity.x > 1.5
 
-	var wants_jump: bool = recovering or difference.y < -32.0 or route_requires_jump
-	if wants_jump and player.jumps_remaining > 0 and cooldown == 0:
+	var grounded := current_platform >= 0 and absf(player.position.y - ai_platform_graph.platforms[current_platform].position.y) <= 4.0 and absf(player.velocity.y) <= 1.0
+	var target_platform_is_higher := false
+	if target != null and current_platform >= 0:
+		var target_platform: int = ai_platform_graph.nearest_platform(target.position)
+		target_platform_is_higher = target_platform >= 0 and ai_platform_graph.platforms[target_platform].position.y < ai_platform_graph.platforms[current_platform].position.y - 55.0
+
+	# A normal chase on the same ledge must not cause a jump loop. Grounded
+	# agents jump only for a graph route, a real obstacle/high platform, or
+	# recovery. Extra jumps are reserved for an unreachable landing or rescue.
+	var wants_ground_jump := recovering or (grounded and (route_requires_jump or target_platform_is_higher))
+	var wants_air_jump := false
+	if not grounded and player.jumps_remaining < player.max_jump_count():
+		var destination_platform_rect: Rect2 = ai_platform_graph.platforms[next_platform] if next_platform >= 0 else Rect2()
+		var projected_x: float = player.position.x + player.velocity.x * 8.0
+		var landing_misses_route: bool = next_platform >= 0 and (projected_x < destination_platform_rect.position.x - 28.0 or projected_x > destination_platform_rect.end.x + 28.0)
+		var still_below_route: bool = next_platform >= 0 and player.position.y > destination_platform_rect.position.y + 48.0 and player.velocity.y >= -3.0
+		var air_jump_timing_ready: bool = player.velocity.y >= -2.0
+		var spending_last_jump: bool = player.jumps_remaining == 1
+		var last_jump_is_urgent: bool = recovering or (still_below_route and player.velocity.y >= 0.0) or (landing_misses_route and player.velocity.y >= 2.0)
+		wants_air_jump = (recovering and player.velocity.y >= -4.0) or (route_requires_jump and air_jump_timing_ready and (landing_misses_route or still_below_route) and (not spending_last_jump or last_jump_is_urgent))
+
+	if (wants_ground_jump or wants_air_jump) and player.jumps_remaining > 0 and cooldown == 0:
 		controls["jump"] = true
 		controls["jump_just"] = true
-		ai_jump_cooldowns[player.player_index] = 7
+		# Leave enough time for the previous jump to develop before spending
+		# another jump, especially on Triple Jump.
+		ai_jump_cooldowns[player.player_index] = 7 if grounded else 10
 	if route_requires_drop and absf(difference.x) < 55.0:
 		controls["down"] = true
 		controls["down_just"] = true
@@ -817,7 +889,7 @@ func spawn_arrow(shooter: Node, start: Vector2, direction: int, attack: Dictiona
 		self, shooter, start, direction,
 		float(attack["firepower"]), float(attack["speed"]), float(attack.get("spread", 0.0)),
 		float(attack["damage"]), 0, false,
-		{"kind": "arrow", "life": 120, "angle_offset": angle_degrees}
+		{"kind": "arrow", "life": 120, "angle_offset": angle_degrees, "gravity": float(attack.get("gravity", 0.24))}
 	)
 
 func spawn_knife(shooter: Node, start: Vector2, direction: int, attack: Dictionary) -> void:
@@ -849,11 +921,28 @@ func spawn_homing(shooter: Node, start: Vector2, direction: int, attack: Diction
 		float(attack["firepower"]), float(attack["speed"]), float(attack.get("spread", 0.0)),
 		float(attack["damage"]), 0, false,
 		{
-			"kind": "homing_jokes" if joke_variant else "homing",
-			"life": int(attack["life"]), "turning": float(attack["turning"]),
+			"kind": "homing_split" if joke_variant else "homing",
+			"life": int(attack["life"]), "turning": float(attack.get("turning", 0.0)),
 			"homing_speed": float(attack["speed"]), "blast_radius": 50.0,
+			"split_frame": int(attack.get("split_frame", 18)),
 		}
 	)
+
+func spawn_split_missiles(shooter: Node, start: Vector2, source_velocity: Vector2, damage: float, power: float, radius: float) -> void:
+	var source_direction := source_velocity.normalized()
+	if source_direction == Vector2.ZERO:
+		source_direction = Vector2.RIGHT
+	for angle in [0.0, -45.0, 45.0]:
+		var projectile := ProjectileScript.new()
+		add_child(projectile)
+		var split_direction := source_direction.rotated(deg_to_rad(angle))
+		projectile.setup(
+			self, shooter, start, 1 if split_direction.x >= 0.0 else -1,
+			power, maxf(source_velocity.length(), 12.0), 0.0,
+			damage, 0, false,
+			{"kind": "split_missile", "life": 70, "blast_radius": radius}
+		)
+		projectile.velocity = split_direction * maxf(source_velocity.length(), 12.0)
 
 func spawn_bomb(shooter: Node, start: Vector2, direction: int, attack: Dictionary) -> void:
 	var projectile := ProjectileScript.new()
@@ -865,6 +954,11 @@ func spawn_bomb(shooter: Node, start: Vector2, direction: int, attack: Dictionar
 		{
 			"kind": "bomb", "life": 120, "blast_radius": float(attack["blast_radius"]),
 			"gravity": float(attack["gravity"]), "bounce": bool(attack["bounce"]),
+			"angle_offset": float(attack.get("angle", -45.0)),
+			"platform_collision": bool(attack.get("platform_collision", true)),
+			"detonate_on_expiry": bool(attack.get("detonate_on_expiry", true)),
+			"bounce_horizontal_retention": float(attack.get("bounce_horizontal_retention", 0.72)),
+			"roll_horizontal_retention": float(attack.get("roll_horizontal_retention", 0.5)),
 		}
 	)
 
@@ -917,15 +1011,17 @@ func melee_attack(
 				spawn_small_wave(target.position + Vector2(0, -24))
 			else:
 				target.receive_melee(damage, power, vertical, freeze, attacker, melee_stun)
-				spawn_hit_effect(target.position + Vector2(0, -24), attacker.player_color, hit_label)
+				spawn_hit_effect(target.position + Vector2(0, -24), attacker.player_color, hit_label, damage, power)
 				hit_count += 1
 	return hit_count
 
-func spawn_hit_effect(at_position: Vector2, color: Color, hit_label: String = "") -> void:
+func spawn_hit_effect(at_position: Vector2, _color: Color, hit_label: String = "", damage: float = 0.0, knockback: float = 0.0) -> void:
 	# Redux impact feedback is a conspicuous red/orange burst, independent of
-	# the attacker's custom player colour.
-	var impact_color := Color("ff5a24")
-	effects.append({"type": "hit", "position": at_position, "color": impact_color, "label": hit_label if not hit_label.is_empty() else "HIT", "life": 7})
+	# the attacker's custom player colour. High-damage/knockback attacks use the
+	# larger dark-red treatment from the original fx_textbig path.
+	var strong_hit := hit_label == "SNIPED" or damage >= 30.0 or knockback >= 25.0
+	var impact_color := Color("a91224") if strong_hit else Color("ff4b2b")
+	effects.append({"type": "hit", "position": at_position, "color": impact_color, "label": hit_label if not hit_label.is_empty() else "HIT", "life": 7, "big": strong_hit})
 	# The original hit path reuses the small expanding wave used by the crate
 	# and explosion feedback. Keep the text/spark layer as a readable supplement.
 	effects.append({"type": "small_wave", "position": at_position, "scale": 0.1, "life": 15})
@@ -1004,7 +1100,7 @@ func play_weapon_frame_sound(weapon_id: int, action: String, frame: int) -> void
 		stream = Smg2Sound
 	elif weapon_id == 2 and ((action == "primary" and frame == 2) or (action == "secondary" and frame == 60)):
 		stream = Pistol3Sound
-	elif weapon_id == 3 and ((action == "primary" and frame == 2) or (action == "secondary" and frame == 136)):
+	elif weapon_id == 3 and action == "primary" and frame == 2:
 		stream = Pistol0Sound
 	elif weapon_id == 4 and action == "primary" and frame == 2:
 		stream = Pistol3Sound
@@ -1012,6 +1108,12 @@ func play_weapon_frame_sound(weapon_id: int, action: String, frame: int) -> void
 		stream = WhooshSound
 	if stream != null:
 		play_random_sound([stream], -6.0)
+
+func play_charged_shot_sound(weapon_id: int) -> void:
+	# Charged shots call this on the exact tick that creates their projectile.
+	# This avoids the old early/late frame-trigger mismatch while aiming.
+	if weapon_id in [3, 12]:
+		play_random_sound([Pistol0Sound], -6.0)
 
 func spawn_stun_effect(at_position: Vector2, source_velocity_x: float) -> void:
 	effects.append({
@@ -1224,7 +1326,12 @@ func _draw() -> void:
 		match effect["type"]:
 			"hit":
 				draw_circle(effect_position, 4.0 + life * 1.5, Color(effect_color, life / 7.0), false, 3.0)
-				draw_string(font, effect_position + Vector2(-38, -18), str(effect.get("label", "HIT")), HORIZONTAL_ALIGNMENT_CENTER, 76, 16, Color.WHITE)
+				var strong_hit := bool(effect.get("big", false))
+				var hit_font_size := 25 if strong_hit else 17
+				var hit_width := 150.0 if strong_hit else 92.0
+				var hit_origin := effect_position + Vector2(-hit_width * 0.5, -24 if strong_hit else -18)
+				draw_string(font, hit_origin + Vector2(2, 2), str(effect.get("label", "HIT")), HORIZONTAL_ALIGNMENT_CENTER, hit_width, hit_font_size, Color(0.08, 0.01, 0.02, 0.85))
+				draw_string(font, hit_origin, str(effect.get("label", "HIT")), HORIZONTAL_ALIGNMENT_CENTER, hit_width, hit_font_size, effect_color)
 			"money":
 				draw_string(font, effect_position + Vector2(0, -18 + life * -0.6), "$", HORIZONTAL_ALIGNMENT_LEFT, 20, 18, Color("ffdd55"))
 			"death_flash":

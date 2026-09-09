@@ -30,6 +30,14 @@ const SCENE_LAYER_ORIGINS := {
 	"scene3": Vector2(485, 160),
 }
 
+# With JUMP_POWER=12 and GRAVITY=0.9, the standard two-jump character rises
+# about 74 pixels before descending. Keep every small ledge within that single
+# jump envelope; Triple Jump remains useful for crossing wider gaps and larger
+# route changes.
+const SINGLE_JUMP_VERTICAL_REACH := 74.0
+const SMALL_PLATFORM_WIDTH_LIMIT := 400.0
+const PLATFORM_ROUTE_GAP := 185.0
+
 # The first map was hand-aligned to its painted ledges. Maps 2-10 are traced
 # from the black platform shapes in symbol 1163. Their exported collision layer
 # sits 12 pixels above scene3, so platforms_for() applies that visual correction.
@@ -37,7 +45,7 @@ const SCENE_LAYER_ORIGINS := {
 const PLATFORM_SETS := {
 	1: [
 		Rect2(85, 83, 510, 18), Rect2(452, 157, 505, 18),
-		Rect2(390, 239, 204, 16), Rect2(40, 291, 510, 18),
+		Rect2(390, 231, 204, 16), Rect2(40, 291, 510, 18),
 		Rect2(305, 375, 407, 18), Rect2(87, 445, 304, 18),
 		Rect2(551, 445, 408, 18),
 	],
@@ -132,7 +140,41 @@ static func platforms_for(map_id: int) -> Array[Rect2]:
 	var visual_offset := Vector2(0, 12) if map_id > 1 else Vector2.ZERO
 	for platform in PLATFORM_SETS.get(map_id, PLATFORM_SETS[1]):
 		result.append(Rect2(platform.position + visual_offset, platform.size))
+	return normalize_single_jump_platforms(result)
+
+static func normalize_single_jump_platforms(source_platforms: Array[Rect2]) -> Array[Rect2]:
+	var result := source_platforms.duplicate()
+	# Lowering an unreachable upper ledge can make it a support for another
+	# ledge. Repeat until every small-platform ascent settles within the envelope.
+	for pass_index in result.size():
+		var changed := false
+		for candidate_index in result.size():
+			var candidate: Rect2 = result[candidate_index]
+			if candidate.size.x >= SMALL_PLATFORM_WIDTH_LIMIT:
+				continue
+			var nearest_support_y := 100000.0
+			for support_index in result.size():
+				if support_index == candidate_index:
+					continue
+				var support: Rect2 = result[support_index]
+				var vertical_gap := support.position.y - candidate.position.y
+				var horizontal_gap := platform_interval_gap(candidate.position.x, candidate.end.x, support.position.x, support.end.x)
+				if vertical_gap > 0.0 and horizontal_gap <= PLATFORM_ROUTE_GAP and absf(candidate.get_center().x - support.get_center().x) <= 300.0:
+					nearest_support_y = minf(nearest_support_y, support.position.y)
+			if nearest_support_y < 99999.0 and nearest_support_y - candidate.position.y > SINGLE_JUMP_VERTICAL_REACH:
+				candidate.position.y = nearest_support_y - SINGLE_JUMP_VERTICAL_REACH
+				result[candidate_index] = candidate
+				changed = true
+		if not changed:
+			break
 	return result
+
+static func platform_interval_gap(first_min: float, first_max: float, second_min: float, second_max: float) -> float:
+	if first_max < second_min:
+		return second_min - first_max
+	if second_max < first_min:
+		return first_min - second_max
+	return 0.0
 
 static func spawns_for(map_id: int) -> Array[Vector2]:
 	var result: Array[Vector2] = []

@@ -17,6 +17,13 @@ var homing_turn := 0.0
 var homing_speed := 0.0
 var bounce := false
 var visual_scale_x := 100.0
+var bomb_detonation_frames := -1
+var bomb_bounce_count := 0
+var split_frame := 18
+var collides_with_platforms := true
+var detonate_on_expiry := true
+var bounce_horizontal_retention := 0.72
+var roll_horizontal_retention := 0.5
 
 func setup(
 		game: Node,
@@ -46,6 +53,11 @@ func setup(
 	homing_turn = float(options.get("turning", 0.0))
 	homing_speed = float(options.get("homing_speed", speed))
 	bounce = bool(options.get("bounce", false))
+	split_frame = int(options.get("split_frame", 18))
+	collides_with_platforms = bool(options.get("platform_collision", true))
+	detonate_on_expiry = bool(options.get("detonate_on_expiry", true))
+	bounce_horizontal_retention = float(options.get("bounce_horizontal_retention", 0.72))
+	roll_horizontal_retention = float(options.get("roll_horizontal_retention", 0.5))
 	if projectile_kind == "bullet" and firepower <= 15.0:
 		visual_scale_x = 70.0
 	var angle_offset := float(options.get("angle_offset", 0.0)) * facing
@@ -66,7 +78,9 @@ func _physics_process(_delta: float) -> void:
 			queue_free()
 			return
 	if age > max_age:
-		if projectile_kind in ["bomb", "homing", "homing_jokes"]:
+		if projectile_kind == "bomb" and not detonate_on_expiry:
+			queue_free()
+		elif projectile_kind in ["bomb", "homing", "homing_jokes", "homing_split", "split_missile"]:
 			detonate(position)
 		else:
 			queue_free()
@@ -84,7 +98,7 @@ func _physics_process(_delta: float) -> void:
 			continue
 		for sample in samples:
 			if target.hit_test_point(sample):
-				if projectile_kind in ["rocket", "bomb", "homing", "homing_jokes"]:
+				if projectile_kind in ["rocket", "bomb", "homing", "homing_jokes", "homing_split", "split_missile"]:
 					detonate(sample)
 					return
 				var damage := explicit_damage if explicit_damage >= 0.0 else firepower * 0.4
@@ -101,12 +115,18 @@ func _physics_process(_delta: float) -> void:
 					hit_label = "SHANKED"
 				elif shooter.weapon_id == 12:
 					hit_label = "SNIPED"
-				arena.spawn_hit_effect(sample, shooter.player_color, hit_label)
+				arena.spawn_hit_effect(sample, shooter.player_color, hit_label, damage, firepower)
 				queue_free()
 				return
 
+	if projectile_kind == "homing_split" and age >= split_frame:
+		arena.spawn_split_missiles(shooter, position, velocity, explicit_damage, firepower, blast_radius)
+		queue_free()
+		return
+
 	if projectile_kind in ["homing", "homing_jokes"]:
 		steer_to_closest_target()
+	var previous_position := position
 	position += velocity
 	velocity.y += gravity
 	if thrown_gun:
@@ -120,20 +140,31 @@ func _physics_process(_delta: float) -> void:
 			return
 	elif projectile_kind == "bomb":
 		rotation += 0.26 * facing
-		if arena.point_hits_platform(position):
-			if bounce:
-				velocity.y = maxf(-9.0, -velocity.y * 0.5)
-				velocity.x *= 0.8
-				if absf(velocity.x) <= 3.0:
-					detonate(position)
-					return
-			else:
+		if bomb_detonation_frames >= 0:
+			bomb_detonation_frames -= 1
+			if bomb_detonation_frames <= 0:
 				detonate(position)
 				return
+		elif collides_with_platforms:
+			var landing_y: float = arena.find_landing_y(previous_position, position)
+			if not is_nan(landing_y):
+				# Resolve at the platform top so a bomb cannot remain embedded and
+				# repeatedly collide. Normal throws lose energy over several hops;
+				# heavy throws settle immediately. The fuse starts only when stopped.
+				position.y = landing_y - 0.5
+				var impact_speed := absf(velocity.y)
+				if bounce and bomb_bounce_count < 4 and (bomb_bounce_count == 0 or impact_speed > 3.25):
+					velocity.y = maxf(-9.0, -impact_speed * 0.5)
+					velocity.x *= bounce_horizontal_retention
+					bomb_bounce_count += 1
+				elif bounce and absf(velocity.x) > 1.2:
+					velocity.x *= roll_horizontal_retention
+					velocity.y = -1.5
+				else:
+					velocity = Vector2.ZERO
+					bomb_detonation_frames = 4
 	elif projectile_kind in ["arrow", "knife", "baseball"]:
 		rotation = velocity.angle()
-		if projectile_kind == "arrow":
-			velocity.y += 0.12
 		arena.spawn_projectile_trail(position, shooter.player_color)
 
 	if position.x < -400.0 or position.x > 1400.0 or position.y < -250.0 or position.y > 850.0:
@@ -144,7 +175,7 @@ func detonate(at_position: Vector2) -> void:
 	var detonation_label := "KABOOM!"
 	if projectile_kind == "bomb":
 		detonation_label = "BOOM!"
-	elif projectile_kind in ["homing", "homing_jokes"]:
+	elif projectile_kind in ["homing", "homing_jokes", "homing_split", "split_missile"]:
 		detonation_label = "KABOOM!"
 	arena.radial_attack(at_position, shooter, explicit_damage, firepower, blast_radius, detonation_label)
 	queue_free()
@@ -163,8 +194,14 @@ func steer_to_closest_target() -> void:
 			closest = target
 	if closest == null:
 		return
-	var desired := position.direction_to(closest.position + Vector2(0, -24)) * homing_speed
-	velocity = velocity.lerp(desired, clampf(homing_turn / 10.0, 0.03, 0.22))
+	var desired_direction := position.direction_to(closest.position + Vector2(0, -24))
+	if desired_direction == Vector2.ZERO:
+		return
+	var current_angle := velocity.angle()
+	var desired_angle := desired_direction.angle()
+	var maximum_turn := deg_to_rad(maxf(homing_turn, 0.1))
+	var turn_delta := clampf(angle_difference(current_angle, desired_angle), -maximum_turn, maximum_turn)
+	velocity = Vector2.RIGHT.rotated(current_angle + turn_delta) * homing_speed
 
 func _draw() -> void:
 	if projectile_kind in ["bullet", "bullet_shell"]:
@@ -178,8 +215,12 @@ func _draw() -> void:
 		var line_length := 20.0 * visual_scale_x / 100.0
 		var tail := -direction * line_length
 		var tip := direction * 2.0
+		# Layer a short fading tail, soft halo, dark outline, and hot core. This
+		# keeps the original length timing while making each round read as tracer.
+		draw_line(tail * 1.35, tail * 0.75, Color(1.0, 0.38, 0.08, 0.18), 9.0 if projectile_kind == "bullet_shell" else 7.0)
+		draw_line(tail, tip, Color(1.0, 0.48, 0.12, 0.32), 8.0 if projectile_kind == "bullet_shell" else 6.0)
 		draw_line(tail, tip, Color("35110b"), 4.0 if projectile_kind == "bullet_shell" else 3.0)
-		draw_line(tail * 0.82, tip, Color("ffb12b"), 2.0 if projectile_kind == "bullet_shell" else 1.4)
+		draw_line(tail * 0.82, tip, Color("fff0a8"), 2.2 if projectile_kind == "bullet_shell" else 1.7)
 		return
 	if thrown_gun:
 		draw_colored_polygon(PackedVector2Array([Vector2(-13, -4), Vector2(9, -4), Vector2(13, 1), Vector2(-2, 4), Vector2(-8, 9)]), Color("4b4f55"))
@@ -197,7 +238,7 @@ func _draw() -> void:
 		draw_circle(Vector2.ZERO, 7.0, Color("202020"))
 		draw_circle(Vector2.ZERO, 5.5, Color("f3f0e8"))
 		draw_arc(Vector2.ZERO, 3.2, -1.1, 1.1, 6, Color("d94b3d"), 1.2)
-	elif projectile_kind in ["homing", "homing_jokes"]:
+	elif projectile_kind in ["homing", "homing_jokes", "homing_split", "split_missile"]:
 		draw_set_transform(Vector2.ZERO, velocity.angle(), Vector2.ONE)
 		var missile_color := Color("8bd14b") if projectile_kind == "homing_jokes" else Color("d7d9dc")
 		draw_colored_polygon(PackedVector2Array([Vector2(-12, -5), Vector2(8, -5), Vector2(14, 0), Vector2(8, 5), Vector2(-12, 5)]), missile_color)

@@ -8,6 +8,7 @@ const WeaponCrateScript = preload("res://scripts/weapons/weapon_crate.gd")
 const ProjectileScript = preload("res://scripts/weapons/projectile.gd")
 const FontCatalog = preload("res://scripts/ui/font_catalog.gd")
 const PlatformGraphScript = preload("res://scripts/ai/platform_graph.gd")
+const TestWeaponOverlayScript = preload("res://scripts/ui/test_weapon_overlay.gd")
 
 var failures: Array[String] = []
 
@@ -47,6 +48,22 @@ func _init() -> void:
 			connection_count += neighbors.size()
 		expect(connection_count > 0, "map %d AI graph must provide jump or drop connections" % map_id)
 	expect(near(MapCatalog.platforms_for(2)[0].position.y, 110.0), "exported maps 2-10 must receive the scene3 vertical alignment correction")
+	for map_id in range(1, 11):
+		var reachable_platforms := MapCatalog.platforms_for(map_id)
+		for candidate_index in reachable_platforms.size():
+			var candidate: Rect2 = reachable_platforms[candidate_index]
+			if candidate.size.x >= MapCatalog.SMALL_PLATFORM_WIDTH_LIMIT:
+				continue
+			var nearest_support_y := 100000.0
+			for support_index in reachable_platforms.size():
+				if support_index == candidate_index:
+					continue
+				var support: Rect2 = reachable_platforms[support_index]
+				var vertical_gap := support.position.y - candidate.position.y
+				var horizontal_gap := MapCatalog.platform_interval_gap(candidate.position.x, candidate.end.x, support.position.x, support.end.x)
+				if vertical_gap > 0.0 and horizontal_gap <= MapCatalog.PLATFORM_ROUTE_GAP and absf(candidate.get_center().x - support.get_center().x) <= 300.0:
+					nearest_support_y = minf(nearest_support_y, support.position.y)
+			expect(nearest_support_y >= 99999.0 or nearest_support_y - candidate.position.y <= MapCatalog.SINGLE_JUMP_VERTICAL_REACH, "map %d small ledges must remain within one standard jump" % map_id)
 
 	var expected_ammo := {1: 9, 2: 24, 3: 6, 4: 14, 5: -1}
 	for weapon_id in range(1, 6):
@@ -61,6 +78,8 @@ func _init() -> void:
 	var angry_cow := WeaponCatalog.get_weapon(3)
 	expect(near(float(angry_cow["secondary"]["speed"]), 47.0), "Angry Cow aimed shot speed must be 47")
 	expect(near(float(angry_cow["secondary"]["firepower"]) * 0.4, 14.8), "Angry Cow aimed damage must be 14.8")
+	expect(str(angry_cow["secondary"]["type"]) == "bullet", "Angry Cow secondary must remain a chargeable aimed shot")
+	expect(int(angry_cow["secondary"]["charge_frames"]) == 14, "Angry Cow aimed shot must converge for fourteen frames")
 	var scattergun := WeaponCatalog.get_weapon(6)
 	var rapid_carbine := WeaponCatalog.get_weapon(7)
 	expect(int(scattergun["primary"]["ammo_cost"]) == 1 and int(scattergun["secondary"]["ammo_cost"]) == 2, "Scattergun must use one shell normally and two shells for BOOM")
@@ -72,6 +91,21 @@ func _init() -> void:
 		expect(str(crate_weapon["name"]) == expected_crate_names[index], "crate weapon %d must retain its original name" % crate_id)
 		expect(bool(crate_weapon.get("crate_only", false)), "crate weapon %d must be marked crate-only" % crate_id)
 		expect(crate_weapon.has("primary") and crate_weapon.has("secondary"), "crate weapon %d must provide both attacks" % crate_id)
+	var sniper := WeaponCatalog.get_weapon(12)
+	expect(str(sniper["secondary"]["type"]) == "sniper_stealth", "Sniper secondary must be a stealth action")
+	var knife := WeaponCatalog.get_weapon(17)
+	expect(str(knife["primary"]["type"]) == "knife" and str(knife["secondary"]["type"]) == "melee", "Throwing Knife primary must throw and secondary must stab")
+	var split_missile := WeaponCatalog.get_weapon(8)
+	expect(str(split_missile["secondary"]["type"]) == "homing_split" and int(split_missile["secondary"]["windup_frames"]) == 4 and int(split_missile["secondary"]["split_frame"]) == 18, "Homing Missile secondary windup and straight-flight split timer must remain separate")
+	expect(near(float(split_missile["primary"]["turning"]), 3.0), "Homing Missile primary must use the increased smooth tracking response")
+	var bow := WeaponCatalog.get_weapon(11)
+	expect(float(bow["primary"]["gravity"]) > 0.24 and near(float(bow["primary"]["gravity"]), float(bow["secondary"]["gravity"])), "both Bow attacks must use the more pronounced shared arc")
+	var bomb_weapon := WeaponCatalog.get_weapon(18)
+	expect(near(float(bomb_weapon["primary"]["angle"]), -45.0) and near(float(bomb_weapon["secondary"]["angle"]), -45.0), "both Bomb throws must launch forward-up at 45 degrees")
+	expect(bool(bomb_weapon["primary"]["platform_collision"]) and not bool(bomb_weapon["secondary"]["platform_collision"]), "Bomb primary must collide with platforms while secondary passes through them")
+	expect(not bool(bomb_weapon["secondary"]["detonate_on_expiry"]) and float(bomb_weapon["primary"]["bounce_horizontal_retention"]) >= 0.86, "Bomb secondary must only detonate on a player and primary must retain its doubled rolling reach")
+	var mini_gun := WeaponCatalog.get_weapon(15)
+	expect(str(mini_gun["secondary"]["type"]) == "minigun_spin" and int(mini_gun["primary"]["startup_frames"]) == 7 and int(mini_gun["primary"]["ramp_frames"]) == 18, "Mini Gun must use a seven-frame startup followed by an eighteen-frame ramp, with a non-firing secondary")
 
 	var displayed_health := 100.0
 	for frame in 8:
@@ -102,10 +136,11 @@ func _init() -> void:
 	player.set_ai_controls({"right": true, "jump": true, "jump_just": true, "primary": true})
 	expect(player.control_pressed("right") and player.control_just_pressed("jump") and player.control_pressed("primary"), "AI must drive the same control interface as a human player")
 	player.set_ai_controlled(false)
-	expect(player.visual_frame_cache.size() == 77, "Sand Hawk's attack and reload frames must preload")
+	expect(player.visual_frame_cache.is_empty(), "weapon selection must not synchronously decode complete animation controllers")
 	player.start_weapon_visual("primary")
 	expect(player.visual_action_active and player.visual_frame == 1 and player.visual_frame_end == 11, "Sand Hawk primary timeline must start at frame 1 and end at frame 11")
 	expect(player.weapon_frame_texture() != null, "the first Sand Hawk action frame must load")
+	expect(player.visual_frame_cache.size() == 1, "weapon animation frames must load lazily one frame at a time")
 	player.process_visual_animation()
 	expect(player.visual_frame == 2, "weapon animation must advance exactly one original frame per 35 Hz tick")
 	player.start_reload()
@@ -145,7 +180,7 @@ func _init() -> void:
 		14: {"primary": Vector2i(1, 32), "secondary": Vector2i(50, 51)},
 		15: {"primary": Vector2i(1, 24), "secondary": Vector2i(2, 75)},
 		16: {"primary": Vector2i(1, 22), "secondary": Vector2i(35, 46)},
-		17: {"primary": Vector2i(1, 15), "secondary": Vector2i(20, 42)},
+		17: {"primary": Vector2i(20, 42), "secondary": Vector2i(1, 15)},
 		18: {"primary": Vector2i(1, 20), "secondary": Vector2i(25, 48)},
 	}
 	for crate_id in WeaponCatalog.CRATE_WEAPON_IDS:
@@ -200,6 +235,202 @@ func _init() -> void:
 	expect(crate.weapon_id == 1, "weapon crate script must instantiate")
 	crate.free()
 
+	var behavior_game := GameScript.new()
+	behavior_game.platforms = [Rect2(-100, 0, 200, 20)]
+	var behavior_player := PlayerScript.new()
+	behavior_player.setup(behavior_game, 0, Vector2.ZERO, Color("0099ff"), 16)
+	behavior_player.set_ai_controlled(true)
+	behavior_player.set_ai_controls({"secondary": true})
+	behavior_player.process_weapons()
+	expect(behavior_player.umbrella_open and behavior_player.umbrella_guard_pose, "Umbrella special must remain in its dedicated open pose while held")
+	behavior_player.set_ai_controls({"secondary": false})
+	behavior_player.process_weapons()
+	expect(not behavior_player.umbrella_open and not behavior_player.umbrella_guard_pose, "Umbrella must close immediately when its input is released")
+	behavior_player.equip_weapon(3, false)
+	behavior_player.set_ai_controls({"secondary": true})
+	behavior_player.process_weapons()
+	expect(behavior_player.charged_attack_active and behavior_player.charged_attack_total_frames == 14 and not behavior_player.visual_action_active, "Angry Cow special must aim for fourteen frames without playing its firing animation")
+	behavior_player.set_ai_controls({"secondary": false})
+	for charge_frame in 14:
+		behavior_player.process_weapons()
+	expect(not behavior_player.charged_attack_active and behavior_game.get_child_count() > 0 and behavior_player.visual_action_active, "Angry Cow release must create one shot and begin its firing animation on the same tick")
+	for child in behavior_game.get_children():
+		child.free()
+	behavior_player.visual_action_active = false
+	behavior_player.secondary_cooldown = 0
+	behavior_player.set_ai_controls({"secondary": true})
+	behavior_player.process_weapons()
+	for held_frame in 18:
+		behavior_player.process_weapons()
+	expect(behavior_player.charged_attack_active and behavior_game.get_child_count() == 0, "holding Angry Cow after convergence must keep aiming without firing early")
+	behavior_player.set_ai_controls({"secondary": false})
+	behavior_player.process_weapons()
+	expect(not behavior_player.charged_attack_active and behavior_game.get_child_count() == 1, "a long Angry Cow hold must still create exactly one shot on release")
+	behavior_player.set_ai_controls({"secondary": true})
+	behavior_player.process_weapons()
+	expect(not behavior_player.charged_attack_active and behavior_game.get_child_count() == 1, "Angry Cow rapid taps must be ignored until its previous firing animation finishes")
+	for child in behavior_game.get_children():
+		child.free()
+	behavior_player.equip_weapon(12, false)
+	behavior_player.set_ai_controls({"secondary": false})
+	behavior_player.process_weapons()
+	behavior_player.set_ai_controls({"secondary": true})
+	behavior_player.process_weapons()
+	expect(behavior_player.hidden_from_sniper, "Sniper special must hide the full player")
+	behavior_player.take_damage(1.0, 0.0, 0, behavior_player)
+	expect(not behavior_player.hidden_from_sniper, "Taking damage must reveal a cloaked Sniper")
+	behavior_player.visual_action_active = false
+	behavior_player.set_ai_controls({"primary": true})
+	behavior_player.process_weapons()
+	expect(behavior_player.charged_attack_active and behavior_player.sniper_aim_pose and not behavior_player.visual_action_active, "Sniper press must enter the aim pose without playing a shooting animation")
+	for charge_frame in 11:
+		behavior_player.process_weapons()
+	expect(behavior_player.charged_attack_active and behavior_player.sniper_aim_pose, "Sniper must hold its dedicated aim pose after the eleven-frame windup")
+	behavior_player.set_ai_controls({"primary": false})
+	behavior_player.process_weapons()
+	expect(not behavior_player.sniper_aim_pose and behavior_player.visual_action_active and behavior_game.get_child_count() == 1, "Sniper release must create exactly one bullet and begin its firing animation together")
+	behavior_player.set_ai_controls({"primary": true})
+	behavior_player.process_weapons()
+	expect(not behavior_player.charged_attack_active and behavior_game.get_child_count() == 1, "Sniper rapid taps must be ignored until the previous firing workflow finishes")
+	for child in behavior_game.get_children():
+		child.free()
+	var bow_player := PlayerScript.new()
+	bow_player.setup(behavior_game, 0, Vector2.ZERO, Color("0099ff"), 11)
+	bow_player.set_ai_controlled(true)
+	bow_player.set_ai_controls({"primary": true})
+	bow_player.process_weapons()
+	var bow_start_ammo := bow_player.ammo
+	expect(bow_player.bow_primary_armed and behavior_game.get_child_count() == 0 and bow_player.ammo == bow_start_ammo, "Bow primary press and hold must prepare without firing or consuming ammo")
+	bow_player.process_weapons()
+	expect(behavior_game.get_child_count() == 0 and bow_player.ammo == bow_start_ammo, "holding Bow primary must not create repeated arrows")
+	bow_player.set_ai_controls({"primary": false})
+	bow_player.process_weapons()
+	expect(behavior_game.get_child_count() == 1 and bow_player.ammo == bow_start_ammo - 1, "Bow primary release must create exactly one arrow and consume ammo once")
+	for child in behavior_game.get_children():
+		child.free()
+	bow_player.visual_action_active = false
+	bow_player.primary_cooldown = 0
+	bow_player.set_ai_controls({"secondary": true})
+	bow_player.process_weapons()
+	var bow_secondary_ammo := bow_player.ammo
+	expect(bow_player.bow_secondary_armed and behavior_game.get_child_count() == 0, "Bow secondary press must prepare without spawning its triple shot")
+	bow_player.set_ai_controls({"secondary": false})
+	bow_player.process_weapons()
+	expect(behavior_game.get_child_count() == 3 and bow_player.ammo == bow_secondary_ammo - 3, "Bow secondary release must create one three-arrow volley and consume three ammo")
+	for child in behavior_game.get_children():
+		child.free()
+
+	var minigun_player := PlayerScript.new()
+	minigun_player.setup(behavior_game, 0, Vector2.ZERO, Color("0099ff"), 15)
+	minigun_player.set_ai_controlled(true)
+	minigun_player.set_ai_controls({"primary": true})
+	for startup_frame in 7:
+		minigun_player.process_weapons()
+	expect(minigun_player.minigun_startup_active and minigun_player.minigun_startup_frames == 7 and minigun_player.ammo == 150, "Mini Gun must complete seven startup frames without consuming ammo")
+	for ramp_frame in 18:
+		minigun_player.primary_cooldown = 0
+		minigun_player.process_weapons()
+	expect(minigun_player.minigun_ramp_frames == 18 and minigun_player.minigun_last_shot_cooldown == 2 and near(minigun_player.minigun_last_shot_recoil, 1.6), "Mini Gun must reach maximum fire rate and stronger recoil only after the following eighteen-frame ramp")
+	minigun_player.set_ai_controls({"primary": false})
+	minigun_player.process_weapons()
+	expect(not minigun_player.minigun_startup_active and minigun_player.minigun_startup_frames == 0 and minigun_player.minigun_ramp_frames == 0, "Mini Gun release must reset both startup and ramp progress")
+	var minigun_ammo_after_primary := minigun_player.ammo
+	var minigun_children_after_primary := behavior_game.get_child_count()
+	minigun_player.set_ai_controls({"secondary": true})
+	minigun_player.process_weapons()
+	expect(minigun_player.ammo == minigun_ammo_after_primary and behavior_game.get_child_count() == minigun_children_after_primary, "Mini Gun secondary must not create a projectile or consume ammo")
+	for child in behavior_game.get_children():
+		child.free()
+
+	var homing_player := PlayerScript.new()
+	homing_player.setup(behavior_game, 1, Vector2.ZERO, Color("ff355a"), 8)
+	homing_player.set_ai_controlled(true)
+	homing_player.set_ai_controls({"secondary": true})
+	homing_player.process_weapons()
+	expect(homing_player.homing_secondary_windup_frames == 4 and behavior_game.get_child_count() == 0, "Homing Missile secondary must begin its short launch windup without spawning early")
+	homing_player.set_ai_controls({"secondary": false})
+	for windup_frame in 4:
+		homing_player.process_weapons()
+	expect(behavior_game.get_child_count() == 1 and behavior_game.get_child(0).projectile_kind == "homing_split" and behavior_game.get_child(0).age == 0, "Homing Missile split timer must start only after the launch windup finishes")
+	for child in behavior_game.get_children():
+		child.free()
+
+	var bomb := ProjectileScript.new()
+	bomb.setup(behavior_game, minigun_player, Vector2(0, -1), 1, 40.0, 0.0, 0.0, 32.0, 0, false, {"kind": "bomb", "bounce": false, "gravity": 1.26, "blast_radius": 50.0, "platform_collision": true})
+	bomb._physics_process(0.0)
+	bomb._physics_process(0.0)
+	expect(bomb.bomb_detonation_frames == 4 and not bomb.is_queued_for_deletion(), "Bomb platform contact must start a four-frame fuse instead of detonating immediately")
+	bomb.free()
+	var bouncy_bomb := ProjectileScript.new()
+	bouncy_bomb.setup(behavior_game, minigun_player, Vector2(0, -1), 1, 40.0, 0.0, 0.0, 32.0, 0, false, {"kind": "bomb", "bounce": true, "gravity": 1.26, "blast_radius": 50.0, "platform_collision": true, "bounce_horizontal_retention": 0.86, "roll_horizontal_retention": 0.75})
+	bouncy_bomb._physics_process(0.0)
+	bouncy_bomb._physics_process(0.0)
+	expect(bouncy_bomb.bomb_detonation_frames < 0 and bouncy_bomb.velocity.y < 0.0, "Normal bomb must bounce on its first platform contact instead of exploding or arming")
+	for bounce_frame in 40:
+		if bouncy_bomb.bomb_detonation_frames >= 0:
+			break
+		bouncy_bomb._physics_process(0.0)
+	expect(bouncy_bomb.bomb_detonation_frames >= 0, "Normal bomb must eventually settle before starting its four-frame fuse")
+	bouncy_bomb.free()
+	var passthrough_bomb := ProjectileScript.new()
+	passthrough_bomb.setup(behavior_game, minigun_player, Vector2(0, -1), 1, 40.0, 10.0, 0.0, 32.0, 0, false, {"kind": "bomb", "gravity": 1.26, "blast_radius": 50.0, "angle_offset": -45.0, "platform_collision": false, "detonate_on_expiry": false})
+	expect(near(rad_to_deg(passthrough_bomb.velocity.angle()), -45.0), "right-facing Bomb throw must launch forward-up at 45 degrees")
+	for passthrough_frame in 14:
+		passthrough_bomb._physics_process(0.0)
+	expect(passthrough_bomb.bomb_detonation_frames < 0 and passthrough_bomb.position.y > 0.0, "Bomb secondary must cross a platform without bouncing, stopping, or arming a fuse")
+	passthrough_bomb.free()
+	var left_bomb := ProjectileScript.new()
+	left_bomb.setup(behavior_game, minigun_player, Vector2.ZERO, -1, 40.0, 10.0, 0.0, 32.0, 0, false, {"kind": "bomb", "angle_offset": -45.0, "platform_collision": false, "detonate_on_expiry": false})
+	expect(near(rad_to_deg(left_bomb.velocity.angle()), -135.0), "left-facing Bomb throw must mirror the forward-up 45-degree launch")
+	left_bomb.free()
+	var bomb_target := PlayerScript.new()
+	bomb_target.setup(behavior_game, 1, Vector2.ZERO, Color("ff355a"), 1)
+	behavior_game.players = [minigun_player, bomb_target]
+	var player_hit_bomb := ProjectileScript.new()
+	player_hit_bomb.setup(behavior_game, minigun_player, Vector2(0, -1), 1, 40.0, 10.0, 0.0, 32.0, 0, false, {"kind": "bomb", "angle_offset": -45.0, "platform_collision": false, "detonate_on_expiry": false, "blast_radius": 50.0})
+	var blast_count_before_hit := behavior_game.effects.size()
+	player_hit_bomb._physics_process(0.0)
+	expect(player_hit_bomb.is_queued_for_deletion() and behavior_game.effects.size() > blast_count_before_hit, "Bomb secondary must still detonate immediately when it touches a player")
+	player_hit_bomb.free()
+	behavior_game.players = []
+	var expired_bomb := ProjectileScript.new()
+	expired_bomb.setup(behavior_game, minigun_player, Vector2.ZERO, 1, 40.0, 0.0, 0.0, 32.0, 0, false, {"kind": "bomb", "life": 0, "platform_collision": false, "detonate_on_expiry": false, "blast_radius": 50.0})
+	var blast_count_before_expiry := behavior_game.effects.size()
+	expired_bomb._physics_process(0.0)
+	expect(expired_bomb.is_queued_for_deletion() and behavior_game.effects.size() == blast_count_before_expiry, "Bomb secondary must disappear without exploding when its flight lifetime expires")
+	expired_bomb.free()
+	bomb_target.free()
+
+	var split_parent := ProjectileScript.new()
+	split_parent.setup(behavior_game, minigun_player, Vector2.ZERO, 1, 32.0, 10.0, 0.0, 32.0, 0, false, {"kind": "homing_split", "life": 70, "blast_radius": 50.0, "split_frame": 18})
+	split_parent.age = 17
+	split_parent._physics_process(0.0)
+	expect(behavior_game.get_child_count() == 3, "Homing Missile special must create three straight split missiles")
+	for child in behavior_game.get_children():
+		child.free()
+	split_parent.free()
+	var arrow := ProjectileScript.new()
+	arrow.setup(behavior_game, minigun_player, Vector2(300, 300), 1, 34.0, 30.0, 0.0, 20.0, 0, false, {"kind": "arrow", "gravity": 0.34})
+	var arrow_vertical_speed := arrow.velocity.y
+	arrow._physics_process(0.0)
+	expect(near(arrow.velocity.y - arrow_vertical_speed, 0.34), "arrow flight must apply the increased gravity step per frame")
+	arrow.free()
+	var homing_target := PlayerScript.new()
+	homing_target.position = Vector2(0, 200)
+	behavior_game.players = [minigun_player, homing_target]
+	var guided_missile := ProjectileScript.new()
+	guided_missile.setup(behavior_game, minigun_player, Vector2.ZERO, 1, 32.0, 12.0, 0.0, 32.0, 0, false, {"kind": "homing", "life": 100, "turning": 3.0, "homing_speed": 12.0, "blast_radius": 50.0})
+	guided_missile.age = 18
+	guided_missile._physics_process(0.0)
+	expect(guided_missile.velocity.angle() >= deg_to_rad(2.99) and guided_missile.velocity.angle() <= deg_to_rad(3.01), "Homing Missile must use the increased but still smooth per-frame angular limit")
+	guided_missile.free()
+	homing_target.free()
+	behavior_player.free()
+	minigun_player.free()
+	homing_player.free()
+	bow_player.free()
+	behavior_game.free()
+
 	var game := GameScript.new()
 	expect(game.HitSounds.size() == 2 and game.FallDeathSounds.size() == 4 and game.ExplosionSounds.size() == 4, "original hit, fall-death, and explosion sound pools must be complete")
 	expect(game.LandingSounds.size() == 3, "all three original landing sounds must be available")
@@ -220,11 +451,14 @@ func _init() -> void:
 	game.update_effect(0)
 	expect(game.effects.size() == 1 and near(float(game.effects[0]["scale"]), 2.05), "small impact wave must follow the original half-distance scale easing")
 	game.effects.clear()
-	game.spawn_hit_effect(Vector2(300, 160), Color("0099ff"), "SNIPED")
-	expect(game.effects.size() == 7 and game.effects[0]["label"] == "SNIPED", "hit feedback must include the original label and shrapnel burst")
-	expect(Color(game.effects[0]["color"]) == Color("ff5a24") and Color(game.effects[2]["color"]) == Color("ff8a2b"), "hit feedback must use the original-style warm impact palette instead of player colour")
+	game.spawn_hit_effect(Vector2(300, 160), Color("0099ff"), "SNIPED", 26.0, 65.0)
+	expect(game.effects.size() == 7 and game.effects[0]["label"] == "SNIPED" and bool(game.effects[0]["big"]), "Sniper hit feedback must use the large original label and shrapnel burst")
+	expect(Color(game.effects[0]["color"]) == Color("a91224") and Color(game.effects[2]["color"]) == Color("ff8a2b"), "high-power hit feedback must use the dark-red treatment instead of player colour")
 	game.update_effect(2)
 	expect(game.effects[2]["type"] == "shrapnel" and float(game.effects[2]["scale"]) < 1.25, "shrapnel feedback must advance and fade")
+	game.effects.clear()
+	game.spawn_hit_effect(Vector2(300, 160), Color.WHITE, "HIT", 9.2, 23.0)
+	expect(not bool(game.effects[0]["big"]) and Color(game.effects[0]["color"]) == Color("ff4b2b"), "ordinary player hits must use readable red-orange text even for a white player")
 	game.effects.clear()
 	game.spawn_combat_text(Vector2(300, 160), "BOOM!", Color("ffd166"), true)
 	expect(game.effects.size() == 1 and game.effects[0]["type"] == "combat_text" and game.effects[0]["life_max"] == 20, "combat text must retain the original expanding lifetime")
@@ -298,6 +532,11 @@ func _init() -> void:
 	var live_game := GameScript.new()
 	live_game.create_players()
 	expect(live_game.players.size() == 4 and live_game.huds.size() == 4, "the four custom-game slots must each have an isolated runtime player and HUD container")
+	for slot in 4:
+		live_game.open_player_modal(slot, 1)
+		live_game.player_modal_cursor = 2
+		live_game.select_player_modal_item()
+		expect(live_game.selected_weapons[slot] == 3 and live_game.players[slot].visual_frame_cache.is_empty(), "Angry Cow must switch instantly in every player slot without eagerly loading its full controller")
 	live_game.enter_player_setup_screen()
 	live_game.process_menu_click(Vector2(50, 125))
 	expect(live_game.player_slot_types[0] == GameScript.SlotType.EMPTY, "the first slot must be clearable like every other slot")
@@ -310,6 +549,26 @@ func _init() -> void:
 	expect(live_game.round_started and live_game.match_participant_count == 1, "a single configured slot must create a valid one-participant round")
 	expect(not live_game.players[1].eliminated and live_game.players[1].visible, "the configured slot must be the only active runtime character")
 	expect(live_game.players[0].eliminated and live_game.players[2].eliminated and live_game.players[3].eliminated, "empty slots must not participate in combat")
+	var player2_default_weapon: int = live_game.players[1].default_weapon_id
+	expect(live_game.assign_test_weapon_to_player2(15), "in-game test picker must assign a crate weapon to active Player 2")
+	expect(live_game.players[1].weapon_id == 15 and live_game.players[1].default_weapon_id == player2_default_weapon and live_game.players[1].ammo == 150, "test weapon assignment must preserve Player 2's configured default and initialize crate ammo")
+	expect(not live_game.assign_test_weapon_to_player2(1), "in-game test picker must reject non-special weapons")
+	var test_overlay := TestWeaponOverlayScript.new()
+	test_overlay.setup(live_game)
+	live_game.selected_map = 7
+	expect(test_overlay.map_badge_text() == "MAP 07", "gameplay overlay must show the selected map number in the lower-left badge")
+	var unique_weapon_cells: Array[Rect2] = []
+	for weapon_index in WeaponCatalog.CRATE_WEAPON_IDS.size():
+		var weapon_cell: Rect2 = test_overlay.weapon_cell_rect(weapon_index)
+		expect(not unique_weapon_cells.any(func(existing: Rect2) -> bool: return existing.intersects(weapon_cell)), "all thirteen test weapon choices must have distinct click targets")
+		unique_weapon_cells.append(weapon_cell)
+	test_overlay.free()
+	live_game.screen_shake_frames = 8
+	live_game.position = Vector2(4, -3)
+	live_game.exit_round_to_map_selection()
+	expect(not live_game.round_started and live_game.menu_screen == GameScript.MenuScreen.MAP_SELECTION and live_game.map_menu_cursor == live_game.selected_map, "Esc from a live round must return directly to the current map selection")
+	expect(live_game.players.all(func(candidate: Node) -> bool: return not candidate.visible) and live_game.huds.all(func(hud: Node) -> bool: return not hud.visible), "leaving a round for map selection must hide all gameplay players and HUDs")
+	expect(live_game.screen_shake_frames == 0 and live_game.position == Vector2.ZERO, "leaving a round must clear residual screen shake")
 	live_game.free()
 
 	var ai_game := GameScript.new()
@@ -322,7 +581,7 @@ func _init() -> void:
 	var same_platform_target := PlayerScript.new()
 	same_platform_target.position = Vector2(500, 300)
 	var edge_controls := ai_game.build_ai_controls(ai_actor, same_platform_target)
-	expect(not edge_controls["right"] and edge_controls["left"], "AI-3 must brake inward instead of walking off an unplanned platform edge")
+	expect(not edge_controls["right"] and edge_controls["left"] and not edge_controls["jump_just"], "AI-3 must brake inward instead of walking off an unplanned platform edge or jump-looping")
 	ai_game.ai_jump_cooldowns.clear()
 	ai_actor.position = Vector2(10, 520)
 	ai_actor.velocity = Vector2(-6, 8)
@@ -335,12 +594,39 @@ func _init() -> void:
 	same_platform_target.position = Vector2(470, 220)
 	var route_controls := ai_game.build_ai_controls(ai_actor, same_platform_target)
 	expect(route_controls["right"] and route_controls["jump_just"], "AI-3 must jump toward the next platform selected by the route graph")
+	ai_game.ai_jump_cooldowns.clear()
+	ai_game.ai_platform_graph.rebuild([Rect2(7, 501, 960, 18)])
+	ai_actor.position = Vector2(500, 501)
+	ai_actor.velocity = Vector2.ZERO
+	ai_actor.jumps_remaining = 2
+	same_platform_target.position = Vector2(650, 501)
+	var low_floor_controls := ai_game.build_ai_controls(ai_actor, same_platform_target)
+	expect(not low_floor_controls["jump_just"], "AI must not mistake map 6's low floor for an out-of-bounds recovery state")
+	ai_game.ai_jump_cooldowns.clear()
+	ai_game.ai_platform_graph.rebuild([Rect2(100, 300, 200, 20), Rect2(380, 180, 200, 20)])
+	ai_actor.set_perk(1)
+	ai_actor.position = Vector2(280, 260)
+	ai_actor.velocity = Vector2(6, -6)
+	ai_actor.jumps_remaining = 2
+	same_platform_target.position = Vector2(470, 180)
+	var early_air_controls := ai_game.build_ai_controls(ai_actor, same_platform_target)
+	expect(not early_air_controls["jump_just"], "Triple Jump AI must preserve extra jumps while the current ascent still has useful lift")
+	ai_game.ai_jump_cooldowns.clear()
+	ai_actor.velocity = Vector2(6, 1)
+	var second_jump_controls := ai_game.build_ai_controls(ai_actor, same_platform_target)
+	expect(second_jump_controls["jump_just"], "Triple Jump AI must use a second jump when the projected route landing is short")
+	ai_game.ai_jump_cooldowns.clear()
+	ai_actor.position = Vector2(330, 245)
+	ai_actor.velocity = Vector2(2, 3)
+	ai_actor.jumps_remaining = 1
+	var rescue_jump_controls := ai_game.build_ai_controls(ai_actor, same_platform_target)
+	expect(rescue_jump_controls["jump_just"], "Triple Jump AI must spend its final jump when falling short of a required higher route")
 	ai_actor.free()
 	same_platform_target.free()
 	ai_game.free()
 
 	if failures.is_empty():
-		print("SMOKE TEST PASSED: 35 Hz, four free player slots, AI-3 movement recovery, ten maps, eighteen weapons, line projectiles, delayed crate warning, combat effects, health easing, and pickup verified")
+		print("SMOKE TEST PASSED: 35 Hz, four free player slots, AI-3 movement recovery, ten maps, eighteen weapons, P2 test picker, map badge, projectiles, combat effects, health easing, and pickup verified")
 		quit(0)
 	else:
 		for failure in failures:

@@ -51,7 +51,7 @@ const WEAPONS := {
 		},
 		"secondary": {
 			"type": "bullet", "firepower": 37.0, "speed": 47.0,
-			"spread": 0.0, "recoil": 2.0, "cooldown": 35,
+			"spread": 0.0, "recoil": 2.0, "cooldown": 35, "charge_frames": 14,
 		},
 	},
 	4: {
@@ -131,12 +131,12 @@ const WEAPONS := {
 		"primary": {
 			"type": "homing", "damage": 32.0, "firepower": 32.0,
 			"speed": 12.0, "spread": 0.0, "recoil": 8.0, "cooldown": 35,
-			"turning": 1.1, "life": 100,
+			"turning": 3.0, "life": 100,
 		},
 		"secondary": {
-			"type": "homing_jokes", "damage": 32.0, "firepower": 32.0,
+			"type": "homing_split", "damage": 32.0, "firepower": 32.0,
 			"speed": 10.0, "spread": 0.0, "recoil": 8.0, "cooldown": 35,
-			"turning": 0.5, "life": 70,
+			"windup_frames": 4, "split_frame": 18, "life": 70,
 		},
 	},
 	9: {
@@ -154,14 +154,14 @@ const WEAPONS := {
 	11: {
 		"name": "BOW", "tagline": "Straight arrow or triple shot",
 		"primary_label": "Arrow", "secondary_label": "Triple Arrow", "ammo": 10, "crate_only": true,
-		"primary": {"type": "arrow", "damage": 20.0, "firepower": 34.0, "speed": 30.0, "angle": -3.0, "spread": 0.0, "recoil": 0.0, "cooldown": 20},
-		"secondary": {"type": "arrow_burst", "damage": 20.0, "firepower": 34.0, "speed": 30.0, "angles": [-13.0, 7.0, -3.0], "ammo_cost": 3, "recoil": 0.0, "cooldown": 30},
+		"primary": {"type": "arrow", "damage": 20.0, "firepower": 34.0, "speed": 30.0, "angle": -3.0, "spread": 0.0, "recoil": 0.0, "cooldown": 20, "gravity": 0.34},
+		"secondary": {"type": "arrow_burst", "damage": 20.0, "firepower": 34.0, "speed": 30.0, "angles": [-13.0, 7.0, -3.0], "ammo_cost": 3, "recoil": 0.0, "cooldown": 30, "gravity": 0.34},
 	},
 	12: {
 		"name": "SNIPER", "tagline": "Slow, accurate and devastating",
 		"primary_label": "Sniper Shot", "secondary_label": "Aimed Shot", "ammo": 5, "crate_only": true,
-		"primary": {"type": "bullet", "firepower": 65.0, "speed": 25.0, "spread": 1.0, "recoil": 5.0, "cooldown": 48},
-		"secondary": {"type": "bullet", "firepower": 65.0, "speed": 25.0, "spread": 0.0, "recoil": 5.0, "cooldown": 55, "semi_auto": true, "text_effect": "BOOM!"},
+		"primary": {"type": "bullet", "firepower": 65.0, "speed": 25.0, "spread": 1.0, "recoil": 5.0, "cooldown": 48, "charge_frames": 11, "aim_pose_frame": 16},
+		"secondary": {"type": "sniper_stealth", "cooldown": 1, "semi_auto": true},
 	},
 	13: {
 		"name": "MP5K", "tagline": "Compact automatic fire",
@@ -176,28 +176,28 @@ const WEAPONS := {
 		"secondary": {"type": "bullet", "firepower": 11.5, "speed": 25.0, "spread": 20.0, "recoil": 0.3, "cooldown": 5},
 	},
 	15: {
-		"name": "MINI GUN", "tagline": "Steady rapid fire",
-		"primary_label": "Mini Fire", "secondary_label": "Mini Fire", "ammo": 150, "crate_only": true,
-		"primary": {"type": "bullet", "firepower": 13.0, "speed": 25.0, "spread": 7.0, "recoil": 0.6, "cooldown": 3},
-		"secondary": {"type": "bullet", "firepower": 13.0, "speed": 25.0, "spread": 7.0, "recoil": 0.6, "cooldown": 3},
+		"name": "MINI GUN", "tagline": "Accelerating automatic fire",
+		"primary_label": "Mini Fire", "secondary_label": "Spin Barrels", "ammo": 150, "crate_only": true,
+		"primary": {"type": "bullet", "firepower": 13.0, "speed": 25.0, "spread": 7.0, "recoil": 1.6, "cooldown": 2, "startup_frames": 7, "ramp_frames": 18, "start_cooldown": 6, "start_recoil": 0.35},
+		"secondary": {"type": "minigun_spin", "cooldown": 1},
 	},
 	16: {
 		"name": "UMBRELLA", "tagline": "Block shots or strike back",
 		"primary_label": "Umbrella Strike", "secondary_label": "Open Umbrella", "ammo": 100, "crate_only": true,
 		"primary": {"type": "melee", "damage": 17.0, "range": 80.0, "min_y": -30.0, "max_y": 20.0, "knockback": 28.0, "vertical": -10.0, "hitstop": 2, "stun": 15, "cooldown": 25, "text_effect": "POW"},
-		"secondary": {"type": "umbrella_open", "cooldown": 1, "semi_auto": true},
+		"secondary": {"type": "umbrella_open", "cooldown": 1, "semi_auto": true, "guard_pose_frame": 41},
 	},
 	17: {
-		"name": "THROWING KNIFE", "tagline": "Stab close or throw a knife",
-		"primary_label": "Knife Stab", "secondary_label": "Throw Knife", "ammo": 10, "crate_only": true,
-		"primary": {"type": "melee", "damage": 25.0, "range": 75.0, "min_y": -30.0, "max_y": 20.0, "knockback": 19.0, "vertical": 0.0, "hitstop": 2, "respect_umbrella": true, "cooldown": 22, "text_effect": "SHANKED"},
-		"secondary": {"type": "knife", "damage": 10.0, "firepower": 19.0, "speed": 30.0, "angle": -7.0, "spread": 0.0, "recoil": 0.0, "cooldown": 24},
+		"name": "THROWING KNIFE", "tagline": "Throw far or stab close",
+		"primary_label": "Throw Knife", "secondary_label": "Knife Stab", "ammo": 10, "crate_only": true,
+		"primary": {"type": "knife", "damage": 10.0, "firepower": 19.0, "speed": 30.0, "angle": -7.0, "spread": 0.0, "recoil": 0.0, "cooldown": 24},
+		"secondary": {"type": "melee", "damage": 25.0, "range": 75.0, "min_y": -30.0, "max_y": 20.0, "knockback": 19.0, "vertical": 0.0, "hitstop": 2, "respect_umbrella": true, "cooldown": 22, "text_effect": "SHANKED"},
 	},
 	18: {
 		"name": "BOMB", "tagline": "Bouncing explosive with two throws",
 		"primary_label": "Bouncy Bomb", "secondary_label": "Heavy Bomb", "ammo": 5, "crate_only": true,
-		"primary": {"type": "bomb", "damage": 32.0, "firepower": 40.0, "speed": 11.0, "recoil": 0.0, "cooldown": 30, "blast_radius": 50.0, "gravity": 1.26, "bounce": true, "text_effect": "BOOM!"},
-		"secondary": {"type": "bomb", "damage": 32.0, "firepower": 40.0, "speed": 16.0, "recoil": 0.0, "cooldown": 30, "blast_radius": 50.0, "gravity": 1.26, "bounce": false, "text_effect": "BOOM!"},
+		"primary": {"type": "bomb", "damage": 32.0, "firepower": 40.0, "speed": 11.0, "angle": -45.0, "recoil": 0.0, "cooldown": 30, "blast_radius": 50.0, "gravity": 1.26, "bounce": true, "platform_collision": true, "detonate_on_expiry": true, "bounce_horizontal_retention": 0.86, "roll_horizontal_retention": 0.75, "text_effect": "BOOM!"},
+		"secondary": {"type": "bomb", "damage": 32.0, "firepower": 40.0, "speed": 16.0, "angle": -45.0, "recoil": 0.0, "cooldown": 30, "blast_radius": 50.0, "gravity": 1.26, "bounce": false, "platform_collision": false, "detonate_on_expiry": false, "text_effect": "BOOM!"},
 	},
 }
 

@@ -57,7 +57,7 @@ const WEAPON_VISUAL_RANGES := {
 	14: {"primary": Vector2i(1, 32), "secondary": Vector2i(50, 51)},
 	15: {"primary": Vector2i(1, 24), "secondary": Vector2i(2, 75)},
 	16: {"primary": Vector2i(1, 22), "secondary": Vector2i(35, 46)},
-	17: {"primary": Vector2i(1, 15), "secondary": Vector2i(20, 42)},
+	17: {"primary": Vector2i(20, 42), "secondary": Vector2i(1, 15)},
 	18: {"primary": Vector2i(1, 20), "secondary": Vector2i(25, 48)},
 }
 # Original default-weapon reload sections inside each controller timeline.
@@ -113,6 +113,9 @@ var spawn_position := Vector2.ZERO
 ## 2 no recoil, 3 extra ammo, 4 random weapon at spawn, 5 infinite ammo.
 var perk_id := 0
 var umbrella_open := false
+var umbrella_guard_pose := false
+var hidden_from_sniper := false
+var sniper_aim_pose := false
 
 var velocity := Vector2.ZERO
 var facing := 1
@@ -155,6 +158,27 @@ var ai_controls := {
 	"primary": false, "secondary": false,
 	"jump_just": false, "down_just": false,
 }
+
+# Held attacks that use an original-style charge/release sequence.
+var charged_attack_active := false
+var charged_attack_secondary := false
+var charged_attack_frames := 0
+var charged_attack_total_frames := 0
+var charged_attack_released := false
+
+# Bow attacks arm on press and create their projectile only on release.
+var bow_primary_armed := false
+var bow_secondary_armed := false
+
+# Mini Gun has a seven-frame dry startup followed by an eighteen-frame ramp.
+var minigun_startup_active := false
+var minigun_startup_frames := 0
+var minigun_ramp_frames := 0
+var minigun_last_shot_cooldown := 0
+var minigun_last_shot_recoil := 0.0
+
+# Homing Missile's secondary launch windup is separate from its split timer.
+var homing_secondary_windup_frames := 0
 
 const MOVE_ACCEL := 0.65
 const FRICTION := 0.91
@@ -230,9 +254,23 @@ func equip_weapon(new_weapon_id: int, make_default: bool = false) -> void:
 	secondary_cooldown = 0
 	reload_frames = 0
 	umbrella_open = false
+	umbrella_guard_pose = false
+	hidden_from_sniper = false
+	sniper_aim_pose = false
+	charged_attack_active = false
+	charged_attack_released = false
+	bow_primary_armed = false
+	bow_secondary_armed = false
+	minigun_startup_active = false
+	minigun_startup_frames = 0
+	minigun_ramp_frames = 0
+	minigun_last_shot_cooldown = 0
+	minigun_last_shot_recoil = 0.0
+	homing_secondary_windup_frames = 0
 	katana_events.clear()
 	visual_action_active = false
-	precache_weapon_visuals(weapon_id)
+	# Animation frames are loaded on demand. Eagerly decoding every frame here
+	# made the weapon picker appear frozen on long controllers such as Angry Cow.
 	queue_redraw()
 
 func attach_hud(new_hud: Node) -> void:
@@ -301,12 +339,17 @@ func process_movement() -> void:
 	var jump_multiplier := 0.4 if stun_frames > 0 else 1.0
 	var left := control_pressed("left")
 	var right := control_pressed("right")
+	# Sniper remains planted while aiming. Angry Cow is planted during its
+	# fourteen-frame convergence, then may move while holding the completed aim.
+	var charged_weapon_locked := charged_attack_active and (weapon_id == 12 or charged_attack_frames < charged_attack_total_frames)
 	if right and not left:
-		velocity.x += MOVE_ACCEL * move_multiplier
 		facing = 1
+		if not charged_weapon_locked:
+			velocity.x += MOVE_ACCEL * move_multiplier
 	elif left and not right:
-		velocity.x -= MOVE_ACCEL * move_multiplier
 		facing = -1
+		if not charged_weapon_locked:
+			velocity.x -= MOVE_ACCEL * move_multiplier
 
 	if control_just_pressed("jump") and jumps_remaining > 0:
 		jumps_remaining -= 1
@@ -357,9 +400,48 @@ func process_weapons() -> void:
 	var primary: Dictionary = weapon["primary"]
 	var secondary: Dictionary = weapon["secondary"]
 	if str(secondary["type"]) == "umbrella_open":
+		# This is a held defensive state, not a semi-automatic shot. The draw
+		# and collision paths both consult this value on every 35 Hz tick.
 		umbrella_open = secondary_pressed and reload_frames == 0
+		umbrella_guard_pose = umbrella_open
 	else:
 		umbrella_open = false
+		umbrella_guard_pose = false
+
+	if weapon_id == 15:
+		process_minigun_startup(primary, primary_pressed)
+		primary_was_pressed = primary_pressed
+		secondary_was_pressed = secondary_pressed
+		return
+
+	if weapon_id == 11:
+		process_bow_release_attacks(primary, secondary, primary_pressed, secondary_pressed)
+		primary_was_pressed = primary_pressed
+		secondary_was_pressed = secondary_pressed
+		return
+
+	if process_homing_secondary_windup(secondary, secondary_pressed):
+		primary_was_pressed = primary_pressed
+		secondary_was_pressed = secondary_pressed
+		return
+
+	if process_charged_attack(primary, false, primary_pressed, primary_cooldown == 0 and not visual_action_active and weapon_id == 12):
+		primary_was_pressed = primary_pressed
+		secondary_was_pressed = secondary_pressed
+		return
+	if process_charged_attack(secondary, true, secondary_pressed, secondary_cooldown == 0 and not visual_action_active and weapon_id == 3):
+		primary_was_pressed = primary_pressed
+		secondary_was_pressed = secondary_pressed
+		return
+
+	if weapon_id == 12 and secondary_pressed and not secondary_was_pressed and secondary_cooldown == 0:
+		if hidden_from_sniper:
+			hidden_from_sniper = false
+		else:
+			fire_attack(secondary, true)
+		primary_was_pressed = primary_pressed
+		secondary_was_pressed = secondary_pressed
+		return
 
 	var primary_trigger := primary_pressed
 	if primary.get("semi_auto", false):
@@ -377,9 +459,122 @@ func process_weapons() -> void:
 	primary_was_pressed = primary_pressed
 	secondary_was_pressed = secondary_pressed
 
-func fire_attack(attack: Dictionary, secondary: bool) -> void:
+func process_minigun_startup(attack: Dictionary, pressed: bool) -> bool:
+	if not pressed:
+		if minigun_startup_active:
+			minigun_startup_active = false
+			minigun_startup_frames = 0
+			minigun_ramp_frames = 0
+			visual_action_active = false
+		return true
+	if reload_frames > 0:
+		return true
+	if ammo == 0 and not has_perk(5):
+		start_reload()
+		return true
+	if not minigun_startup_active:
+		minigun_startup_active = true
+		minigun_startup_frames = 0
+		minigun_ramp_frames = 0
+		start_weapon_visual("primary")
+
+	var startup_frames := int(attack.get("startup_frames", 7))
+	if minigun_startup_frames < startup_frames:
+		minigun_startup_frames += 1
+		return true
+
+	var ramp_duration := maxi(1, int(attack.get("ramp_frames", 18)))
+	minigun_ramp_frames = mini(minigun_ramp_frames + 1, ramp_duration)
+	if primary_cooldown > 0:
+		return true
+	var ramp_progress := float(minigun_ramp_frames) / float(ramp_duration)
+	var shot := attack.duplicate(true)
+	minigun_last_shot_cooldown = roundi(lerpf(float(attack.get("start_cooldown", 6)), float(attack.get("cooldown", 2)), ramp_progress))
+	minigun_last_shot_recoil = lerpf(float(attack.get("start_recoil", 0.35)), float(attack.get("recoil", 1.6)), ramp_progress)
+	shot["cooldown"] = minigun_last_shot_cooldown
+	shot["recoil"] = minigun_last_shot_recoil
+	fire_attack(shot, false)
+	return true
+
+func process_homing_secondary_windup(attack: Dictionary, pressed: bool) -> bool:
+	if weapon_id != 8:
+		return false
+	if homing_secondary_windup_frames > 0:
+		homing_secondary_windup_frames -= 1
+		if homing_secondary_windup_frames == 0:
+			fire_attack(attack, true)
+		return true
+	if pressed and not secondary_was_pressed and secondary_cooldown == 0:
+		if ammo == 0 and not has_perk(5):
+			start_reload()
+			return true
+		homing_secondary_windup_frames = maxi(1, int(attack.get("windup_frames", 4)))
+		start_weapon_visual("secondary")
+		return true
+	return false
+
+func process_bow_release_attacks(primary: Dictionary, secondary: Dictionary, primary_pressed: bool, secondary_pressed: bool) -> void:
+	var fired_this_frame := false
+	if bow_primary_armed and not primary_pressed:
+		bow_primary_armed = false
+		fire_attack(primary, false)
+		fired_this_frame = true
+	if bow_secondary_armed and not secondary_pressed:
+		bow_secondary_armed = false
+		if not fired_this_frame:
+			fire_attack(secondary, true)
+			fired_this_frame = true
+
+	if reload_frames > 0 or visual_action_active or fired_this_frame:
+		return
+	var can_use_ammo := ammo != 0 or has_perk(5)
+	if primary_pressed and not primary_was_pressed and primary_cooldown == 0 and can_use_ammo and not bow_secondary_armed:
+		bow_primary_armed = true
+	elif secondary_pressed and not secondary_was_pressed and secondary_cooldown == 0 and can_use_ammo and not bow_primary_armed:
+		bow_secondary_armed = true
+	elif not can_use_ammo and (primary_pressed or secondary_pressed):
+		start_reload()
+
+func process_charged_attack(attack: Dictionary, secondary: bool, pressed: bool, eligible: bool) -> bool:
+	var attack_type := str(attack.get("type", ""))
+	var is_charge_attack := (weapon_id == 12 and not secondary) or (weapon_id == 3 and secondary)
+	if not is_charge_attack:
+		return false
+	if charged_attack_active:
+		if not pressed:
+			charged_attack_released = true
+		if charged_attack_frames < charged_attack_total_frames:
+			charged_attack_frames += 1
+		sniper_aim_pose = weapon_id == 12
+		if charged_attack_released and charged_attack_frames >= charged_attack_total_frames:
+			charged_attack_active = false
+			charged_attack_released = false
+			sniper_aim_pose = false
+			fire_attack(attack, secondary, true)
+		return true
+	var just_pressed := pressed and not (secondary_was_pressed if secondary else primary_was_pressed)
+	if just_pressed and eligible:
+		if ammo == 0 and not has_perk(5):
+			start_reload()
+			return true
+		charged_attack_active = true
+		charged_attack_secondary = secondary
+		charged_attack_frames = 0
+		charged_attack_total_frames = maxi(1, int(attack.get("charge_frames", 14 if attack_type == "bullet" and secondary else 11)))
+		charged_attack_released = false
+		sniper_aim_pose = weapon_id == 12
+		return true
+	# A charged trigger is always consumed. Presses made while its previous
+	# animation/cooldown is unfinished are ignored instead of falling through to
+	# the generic instant-fire path.
+	return pressed
+
+func fire_attack(attack: Dictionary, secondary: bool, charged_release: bool = false) -> void:
 	var attack_type := str(attack["type"])
-	if attack_type not in ["katana_combo", "katana_uppercut", "make_it_rain", "melee", "bat_throw", "umbrella_open"]:
+	sniper_aim_pose = false
+	if hidden_from_sniper:
+		hidden_from_sniper = false
+	if attack_type not in ["katana_combo", "katana_uppercut", "make_it_rain", "melee", "bat_throw", "umbrella_open", "sniper_stealth"]:
 		if ammo == 0 and not has_perk(5):
 			start_reload()
 			return
@@ -389,11 +584,13 @@ func fire_attack(attack: Dictionary, secondary: bool) -> void:
 	else:
 		primary_cooldown = int(attack["cooldown"])
 	start_weapon_visual("secondary" if secondary else "primary")
+	if charged_release and is_instance_valid(arena):
+		arena.play_charged_shot_sound(weapon_id)
 	var text_effect := str(attack.get("text_effect", ""))
-	var text_on_attack := attack_type not in ["melee", "bat_throw", "bomb", "homing", "homing_jokes"]
+	var text_on_attack := attack_type not in ["melee", "bat_throw", "bomb", "homing", "homing_jokes", "homing_split"]
 	if text_on_attack and not text_effect.is_empty() and is_instance_valid(arena):
 		arena.spawn_combat_text(muzzle_position() + Vector2(10.0 * facing, -20.0), text_effect, player_color, text_effect in ["BOOM!", "SNIPED"])
-	if attack_type in ["bullet", "bullet_burst", "pellet_burst", "rocket", "homing", "homing_jokes", "arrow", "arrow_burst", "knife", "bomb", "throw_gun"]:
+	if attack_type in ["bullet", "bullet_burst", "pellet_burst", "rocket", "homing", "homing_jokes", "homing_split", "arrow", "arrow_burst", "knife", "bomb", "throw_gun"]:
 		muzzle_flash_frames = 3
 		weapon_kick_frames = 4
 	if attack_type in ["bullet", "bullet_burst", "pellet_burst"]:
@@ -427,8 +624,8 @@ func fire_attack(attack: Dictionary, secondary: bool) -> void:
 			for angle in attack["angles"]:
 				arena.spawn_arrow(self, muzzle_position(), facing, attack, float(angle))
 			consume_ammo(int(attack.get("ammo_cost", 1)))
-		"homing", "homing_jokes":
-			arena.spawn_homing(self, muzzle_position(), facing, attack, attack_type == "homing_jokes")
+		"homing", "homing_jokes", "homing_split":
+			arena.spawn_homing(self, muzzle_position(), facing, attack, attack_type in ["homing_jokes", "homing_split"])
 			consume_ammo(int(attack.get("ammo_cost", 1)))
 		"knife":
 			arena.spawn_knife(self, muzzle_position(), facing, attack)
@@ -447,6 +644,8 @@ func fire_attack(attack: Dictionary, secondary: bool) -> void:
 			consume_ammo(int(attack.get("ammo_cost", 1)))
 		"umbrella_open":
 			umbrella_open = true
+		"sniper_stealth":
+			hidden_from_sniper = true
 		"make_it_rain":
 			take_damage(float(attack["self_damage"]), 0.0, 0, self)
 			arena.spawn_money_effect(muzzle_position(), player_color)
@@ -509,6 +708,7 @@ func start_reload() -> void:
 func take_damage(damage: float, horizontal_impulse: float, stun: int, attacker: Node) -> void:
 	if eliminated or respawn_invulnerability_frames > 0:
 		return
+	hidden_from_sniper = false
 	health -= damage
 	velocity.x += horizontal_impulse
 	stun_frames = maxi(stun_frames, stun)
@@ -547,6 +747,9 @@ func lose_life() -> void:
 	hitstop_frames = 0
 	respawn_invulnerability_frames = 35
 	hit_flash_frames = 0
+	hidden_from_sniper = false
+	charged_attack_active = false
+	minigun_startup_active = false
 	equip_weapon(spawn_weapon_id(), false)
 
 func reset_for_match() -> void:
@@ -561,6 +764,9 @@ func reset_for_match() -> void:
 	weapon_kick_frames = 0
 	respawn_invulnerability_frames = 0
 	hit_flash_frames = 0
+	hidden_from_sniper = false
+	charged_attack_active = false
+	minigun_startup_active = false
 	equip_weapon(spawn_weapon_id(), false)
 	if is_instance_valid(hud):
 		hud.shown_health = 100.0
@@ -714,18 +920,6 @@ func notify_weapon_visual_frame() -> void:
 	if is_instance_valid(arena):
 		arena.play_weapon_frame_sound(weapon_id, visual_action, visual_frame)
 
-func precache_weapon_visuals(requested_weapon_id: int) -> void:
-	if not WEAPON_VISUAL_RANGES.has(requested_weapon_id):
-		return
-	for action in ["primary", "secondary"]:
-		var frame_range: Vector2i = WEAPON_VISUAL_RANGES[requested_weapon_id][action]
-		for frame in range(frame_range.x, frame_range.y + 1):
-			load_and_cache_weapon_frame(requested_weapon_id, action, frame)
-	if WEAPON_RELOAD_RANGES.has(requested_weapon_id):
-		var reload_range: Vector2i = WEAPON_RELOAD_RANGES[requested_weapon_id]
-		for frame in range(reload_range.x, reload_range.y + 1):
-			load_and_cache_weapon_frame(requested_weapon_id, "reload", frame)
-
 func load_and_cache_weapon_frame(requested_weapon_id: int, action: String, frame: int) -> Texture2D:
 	var cache_key := "%d:%s:%d" % [requested_weapon_id, action, frame]
 	if visual_frame_cache.has(cache_key):
@@ -751,6 +945,10 @@ func load_and_cache_weapon_frame(requested_weapon_id: int, action: String, frame
 	return visual_frame_cache.get(cache_key, texture)
 
 func weapon_frame_texture() -> Texture2D:
+	if umbrella_guard_pose and weapon_id == 16:
+		return load_and_cache_weapon_frame(weapon_id, "secondary", int(WeaponCatalog.get_weapon(weapon_id)["secondary"].get("guard_pose_frame", 41)))
+	if sniper_aim_pose and weapon_id == 12:
+		return load_and_cache_weapon_frame(weapon_id, "primary", int(WeaponCatalog.get_weapon(weapon_id)["primary"].get("aim_pose_frame", 16)))
 	if not visual_action_active or not WEAPON_VISUAL_NAMES.has(weapon_id):
 		return null
 	var cache_key := "%d:%s:%d" % [weapon_id, visual_action, visual_frame]
@@ -759,7 +957,7 @@ func weapon_frame_texture() -> Texture2D:
 	return load_and_cache_weapon_frame(weapon_id, visual_action, visual_frame)
 
 func _draw() -> void:
-	if eliminated:
+	if eliminated or hidden_from_sniper:
 		return
 	draw_ellipse_shadow()
 	var animated_weapon := weapon_frame_texture()
@@ -784,6 +982,27 @@ func _draw() -> void:
 		draw_arc(Vector2(0, -57), 8, -PI * 0.5, -PI * 0.5 + TAU * (1.0 - float(reload_frames) / reload_total_frames), 12, Color.WHITE, 2.0)
 	if hit_flash_frames > 0:
 		draw_rect(Rect2(-20, -64, 40, 62), Color(1.0, 0.2, 0.2, 0.18), false, 3.0)
+	if charged_attack_active:
+		draw_charge_aim()
+
+func draw_charge_aim() -> void:
+	var progress := clampf(float(charged_attack_frames) / maxf(float(charged_attack_total_frames), 1.0), 0.0, 1.0)
+	var start := muzzle_position() - position
+	var length := 960.0
+	var core_alpha := 0.035 + progress * 0.055
+	var ray_color := Color(0.78, 0.90, 1.0, core_alpha)
+	if weapon_id == 3:
+		var spread := deg_to_rad(30.0 * (1.0 - progress))
+		var upper := start + Vector2(cos(-spread) * length * facing, sin(-spread) * length)
+		var lower := start + Vector2(cos(spread) * length * facing, sin(spread) * length)
+		draw_line(start, upper, Color(ray_color, ray_color.a * 0.28), 4.0)
+		draw_line(start, lower, Color(ray_color, ray_color.a * 0.28), 4.0)
+		draw_line(start, upper, ray_color, 1.0)
+		draw_line(start, lower, ray_color, 1.0)
+	else:
+		var ray_end := start + Vector2(length * facing, 0)
+		draw_line(start, ray_end, Color(ray_color, ray_color.a * 0.28), 4.0)
+		draw_line(start, ray_end, ray_color, 1.0)
 
 func draw_idle_player() -> void:
 	var texture := texture_for_weapon(weapon_id)

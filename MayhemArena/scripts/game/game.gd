@@ -65,6 +65,12 @@ const LandingSounds := [
 const Pistol0Sound = preload("res://assets/original_reference/audio/pistol0.mp3")
 const Pistol3Sound = preload("res://assets/original_reference/audio/pistol3.mp3")
 const Smg2Sound = preload("res://assets/original_reference/audio/smg2.mp3")
+const Smg1Sound = preload("res://assets/original_reference/audio/smg1.mp3")
+const Rifle1Sound = preload("res://assets/original_reference/audio/rifle1.mp3")
+const Rifle2Sound = preload("res://assets/original_reference/audio/rifle2.mp3")
+const Snipe1Sound = preload("res://assets/original_reference/audio/snipe1.mp3")
+const Snipe5Sound = preload("res://assets/original_reference/audio/snipe5.mp3")
+const SlideSound = preload("res://assets/original_reference/audio/slide.mp3")
 const WhooshSound = preload("res://assets/original_reference/audio/whoosh.mp3")
 const PistolMagSound = preload("res://assets/original_reference/audio/pistol_mag.mp3")
 const PistolSlideSound = preload("res://assets/original_reference/audio/pistol_slide.mp3")
@@ -133,8 +139,14 @@ var menu_mouse_position := Vector2(-1000.0, -1000.0)
 var menu_hover_pulse := 0.0
 var match_participant_count := 0
 var ai_jump_cooldowns: Dictionary = {}
+var ai_states: Dictionary = {}
+var ai_crate_serial := 0
 var ai_platform_graph = PlatformGraphScript.new()
 var test_weapon_overlay: Node
+
+const AI_TARGET_LOCK_FRAMES := 18
+const AI_PROJECTILE_LOOKAHEAD_FRAMES := 12.0
+const AI_EDGE_MARGIN := 28.0
 
 func _ready() -> void:
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
@@ -596,8 +608,12 @@ func set_slot_type(slot: int, slot_type: int) -> void:
 	if slot < 0 or slot >= player_slot_types.size():
 		return
 	player_slot_types[slot] = slot_type
-	players_ready[slot] = false
+	players_ready[slot] = slot_type == SlotType.AI
 	queue_redraw()
+
+func refresh_ai_ready_states() -> void:
+	for slot in player_slot_types.size():
+		players_ready[slot] = player_slot_types[slot] == SlotType.AI
 
 func can_start_round() -> bool:
 	return player_slot_types.any(func(slot_type: int) -> bool: return slot_type != SlotType.EMPTY)
@@ -611,6 +627,7 @@ func enter_selection_screen() -> void:
 	input_lock_frames = 2
 	effects.clear()
 	clear_weapon_crate()
+	reset_ai_states()
 	if is_instance_valid(test_weapon_overlay):
 		test_weapon_overlay.reset()
 	for player in players:
@@ -629,6 +646,7 @@ func exit_round_to_map_selection() -> void:
 	input_lock_frames = 2
 	effects.clear()
 	clear_weapon_crate()
+	reset_ai_states()
 	screen_shake_frames = 0
 	position = Vector2.ZERO
 	if is_instance_valid(test_weapon_overlay):
@@ -655,6 +673,7 @@ func enter_map_selection_screen() -> void:
 func enter_player_setup_screen() -> void:
 	menu_screen = MenuScreen.PLAYER_SETUP
 	players_ready = [false, false, false, false]
+	refresh_ai_ready_states()
 	selected_player_slot = 0
 	player_modal_kind = 0
 	input_lock_frames = 2
@@ -716,6 +735,8 @@ func start_round() -> void:
 		test_weapon_overlay.reset()
 	crate_spawn_frames = 105
 	match_participant_count = 0
+	reset_ai_states()
+	refresh_ai_ready_states()
 	ai_platform_graph.rebuild(platforms)
 	var spawns := MapCatalog.spawns_for(selected_map)
 	for index in players.size():
@@ -747,22 +768,273 @@ func update_ai_controls() -> void:
 	for player in players:
 		if not player.is_ai_controlled or player.eliminated:
 			continue
-		var target: Node = null
-		var closest_distance := INF
-		for candidate in players:
-			if candidate == player or candidate.eliminated:
-				continue
-			var distance: float = player.position.distance_to(candidate.position)
-			if distance < closest_distance:
-				closest_distance = distance
-				target = candidate
+		var state := ai_state_for(player)
+		var target := update_ai_target(player, state)
 		player.set_ai_controls(build_ai_controls(player, target))
+
+func reset_ai_states() -> void:
+	ai_jump_cooldowns.clear()
+	ai_states.clear()
+	ai_crate_serial = 0
+
+func ai_state_for(player: Node) -> Dictionary:
+	var index := int(player.player_index)
+	if not ai_states.has(index):
+		ai_states[index] = {
+			"target": null,
+			"target_lock": 0,
+			"attack_button": "",
+			"attack_hold": 0,
+			"attack_release": 0,
+			"attack_pause": 0,
+			"attack_cycle": index,
+			"crate_serial": -1,
+			"seek_crate": false,
+		}
+	return ai_states[index]
+
+func is_valid_ai_target(player: Node, candidate: Variant) -> bool:
+	if candidate == null or not is_instance_valid(candidate) or candidate == player or candidate.eliminated:
+		return false
+	# Sniper stealth removes the player from normal target acquisition. An AI
+	# that is already almost touching the hidden player may still defend itself.
+	return not candidate.hidden_from_sniper or player.position.distance_to(candidate.position) < 70.0
+
+func choose_ai_target(player: Node) -> Node:
+	var best: Node = null
+	var best_score := INF
+	for candidate in players:
+		if not is_valid_ai_target(player, candidate):
+			continue
+		var distance: float = player.position.distance_to(candidate.position)
+		# Prefer reachable nearby opponents, with a small bias toward weakened
+		# players so four-way matches do not settle into permanent pairs.
+		var score: float = distance + float(candidate.health) * 0.35 + float(candidate.lives) * 8.0
+		if score < best_score:
+			best_score = score
+			best = candidate
+	return best
+
+func update_ai_target(player: Node, state: Dictionary) -> Node:
+	var current: Variant = state.get("target")
+	var lock_frames := maxi(0, int(state.get("target_lock", 0)) - 1)
+	if not is_valid_ai_target(player, current) or lock_frames == 0:
+		current = choose_ai_target(player)
+		lock_frames = AI_TARGET_LOCK_FRAMES
+	state["target"] = current
+	state["target_lock"] = lock_frames
+	return current as Node
 
 func empty_ai_controls() -> Dictionary:
 	return {"left": false, "right": false, "jump": false, "down": false, "primary": false, "secondary": false, "jump_just": false, "down_just": false}
 
+func ai_crate_roll_succeeds(roll: float) -> bool:
+	return roll < 0.60
+
+func register_ai_crate_decisions() -> void:
+	ai_crate_serial += 1
+	for player in players:
+		if not player.is_ai_controlled or player.eliminated:
+			continue
+		var state := ai_state_for(player)
+		state["crate_serial"] = ai_crate_serial
+		state["seek_crate"] = ai_crate_roll_succeeds(randf())
+
+func clear_ai_crate_decisions() -> void:
+	for state_value in ai_states.values():
+		var state: Dictionary = state_value
+		state["seek_crate"] = false
+
+func ai_safe_horizontal_direction(player: Node, desired_direction: int, current_platform: int) -> int:
+	if desired_direction == 0 or current_platform < 0:
+		return desired_direction
+	var platform: Rect2 = ai_platform_graph.platforms[current_platform]
+	if desired_direction < 0 and player.position.x <= platform.position.x + AI_EDGE_MARGIN:
+		return 1 if player.position.x < platform.end.x - AI_EDGE_MARGIN else 0
+	if desired_direction > 0 and player.position.x >= platform.end.x - AI_EDGE_MARGIN:
+		return -1 if player.position.x > platform.position.x + AI_EDGE_MARGIN else 0
+	return desired_direction
+
+func find_ai_overlap_direction(player: Node, current_platform: int) -> int:
+	var closest: Node = null
+	var closest_distance := INF
+	for candidate in players:
+		if candidate == player or candidate.eliminated:
+			continue
+		var difference: Vector2 = player.position - candidate.position
+		if absf(difference.x) > 28.0 or absf(difference.y) > 46.0:
+			continue
+		var distance := difference.length_squared()
+		if distance < closest_distance:
+			closest_distance = distance
+			closest = candidate
+	if closest == null:
+		return 0
+	var away := signi(roundi(player.position.x - closest.position.x))
+	if away == 0:
+		away = -1 if int(player.player_index) < int(closest.player_index) else 1
+	return ai_safe_horizontal_direction(player, away, current_platform)
+
+func find_ai_projectile_threat(player: Node, current_platform: int) -> Dictionary:
+	var best_risk := INF
+	var best_direction := 0
+	var explosive := false
+	var player_center: Vector2 = player.position + Vector2(0, -24)
+	for child in get_children():
+		if child.get_script() != ProjectileScript or child.shooter == player:
+			continue
+		var is_explosive: bool = child.projectile_kind in ["rocket", "bomb", "homing", "homing_jokes", "homing_split", "split_missile"]
+		var speed_squared: float = child.velocity.length_squared()
+		if speed_squared < 0.01 and not is_explosive:
+			continue
+		var relative: Vector2 = player_center - child.position
+		var approach_time := clampf(relative.dot(child.velocity) / speed_squared, 0.0, AI_PROJECTILE_LOOKAHEAD_FRAMES) if speed_squared >= 0.01 else 0.0
+		var miss_distance := player_center.distance_to(child.position + child.velocity * approach_time)
+		var danger_radius := maxf(42.0, float(child.blast_radius) + 34.0) if is_explosive else 38.0
+		if miss_distance > danger_radius:
+			continue
+		var risk := miss_distance + approach_time * 1.5
+		if risk < best_risk:
+			best_risk = risk
+			explosive = is_explosive
+			var away := signi(roundi(player_center.x - child.position.x))
+			if away == 0:
+				away = -signi(roundi(child.velocity.x))
+			best_direction = ai_safe_horizontal_direction(player, away, current_platform)
+	return {"danger": best_risk < INF, "direction": best_direction, "explosive": explosive, "risk": best_risk}
+
+func ai_combat_range(weapon_id: int) -> Vector2:
+	if weapon_id in [5, 10, 16]:
+		return Vector2(42.0, 68.0)
+	if weapon_id in [8, 18]:
+		return Vector2(135.0, 320.0)
+	if weapon_id in [6, 9, 17]:
+		return Vector2(72.0, 245.0)
+	if weapon_id == 12:
+		return Vector2(190.0, 520.0)
+	return Vector2(105.0, 390.0)
+
+func start_ai_attack(state: Dictionary, button: String, hold_frames: int, pause_frames: int = 2) -> void:
+	state["attack_button"] = button
+	state["attack_hold"] = maxi(1, hold_frames)
+	state["attack_release"] = 1
+	state["attack_pause"] = maxi(0, pause_frames)
+
+func drive_ai_attack(state: Dictionary, controls: Dictionary) -> bool:
+	var button := str(state.get("attack_button", ""))
+	if not button.is_empty():
+		var hold_frames := int(state.get("attack_hold", 0))
+		if hold_frames > 0:
+			controls[button] = true
+			state["attack_hold"] = hold_frames - 1
+		else:
+			state["attack_release"] = maxi(0, int(state.get("attack_release", 1)) - 1)
+			if int(state["attack_release"]) == 0:
+				state["attack_button"] = ""
+		return true
+	var pause_frames := int(state.get("attack_pause", 0))
+	if pause_frames > 0:
+		state["attack_pause"] = pause_frames - 1
+		return true
+	return false
+
+func apply_ai_weapon_controls(player: Node, target: Node, controls: Dictionary, state: Dictionary, threat: Dictionary) -> void:
+	if drive_ai_attack(state, controls):
+		return
+	if player.reload_frames > 0 or target == null:
+		return
+	var target_difference: Vector2 = target.position - player.position
+	var distance := target_difference.length()
+	var same_lane := absf(target_difference.y) < 92.0
+	var in_front := target_difference.x * float(player.facing) >= -8.0
+	var weapon_id := int(player.weapon_id)
+
+	# Defensive specials remain ordinary held/pressed controls. They never write
+	# health, position, ammo, visibility, or hit results directly.
+	if weapon_id == 16 and bool(threat.get("danger", false)):
+		start_ai_attack(state, "secondary", 8, 1)
+		drive_ai_attack(state, controls)
+		return
+	if weapon_id == 12 and bool(threat.get("danger", false)) and not player.hidden_from_sniper and player.secondary_cooldown == 0:
+		start_ai_attack(state, "secondary", 1, 3)
+		drive_ai_attack(state, controls)
+		return
+
+	if player.ammo == 0 and not player.has_perk(5):
+		# A normal trigger enters the existing reload/discard flow.
+		start_ai_attack(state, "primary", 1, 2)
+		drive_ai_attack(state, controls)
+		return
+	if not same_lane or not in_front:
+		return
+
+	var cycle := int(state.get("attack_cycle", 0)) + 1
+	state["attack_cycle"] = cycle
+	var button := "primary"
+	var hold_frames := 1
+	var pause_frames := 2
+	match weapon_id:
+		1:
+			button = "secondary" if distance < 230.0 and player.secondary_cooldown == 0 and cycle % 5 == 0 else "primary"
+		2:
+			button = "secondary" if cycle % 2 == 0 else "primary"
+		3:
+			if distance > 180.0 and player.secondary_cooldown == 0 and cycle % 3 == 0:
+				button = "secondary"
+				hold_frames = 14
+				pause_frames = 5
+		4:
+			# Make It Rain is intentional self-damage, so combat AI preserves health.
+			button = "primary"
+		5:
+			if distance > 78.0:
+				return
+			button = "secondary" if target_difference.y < -18.0 and cycle % 2 == 0 else "primary"
+		6:
+			if distance > 285.0:
+				return
+			button = "secondary" if distance < 155.0 and player.ammo >= 2 and cycle % 3 == 0 else "primary"
+		7:
+			button = "secondary" if distance < 220.0 and player.ammo >= 4 and cycle % 4 == 0 else "primary"
+		8:
+			button = "secondary" if distance > 220.0 and cycle % 3 == 0 else "primary"
+		9:
+			button = "secondary" if distance < 80.0 else "primary"
+		10:
+			button = "primary" if distance < 82.0 else "secondary"
+		11:
+			button = "secondary" if distance > 210.0 and player.ammo >= 3 and cycle % 3 == 0 else "primary"
+			hold_frames = 5
+		12:
+			button = "primary"
+			hold_frames = 11
+			pause_frames = 6
+		13:
+			button = "secondary" if distance < 250.0 and player.ammo >= 3 and cycle % 4 == 0 else "primary"
+			hold_frames = 5 if button == "primary" else 1
+		14:
+			button = "secondary" if distance < 150.0 and cycle % 4 == 0 else "primary"
+			hold_frames = 6
+		15:
+			button = "primary"
+			hold_frames = 42
+			pause_frames = 8
+		16:
+			if distance > 84.0:
+				return
+			button = "primary"
+		17:
+			button = "secondary" if distance < 78.0 else "primary"
+		18:
+			if distance < 115.0 or distance > 360.0:
+				return
+			button = "secondary" if absf(target_difference.y) > 34.0 or cycle % 3 == 0 else "primary"
+	start_ai_attack(state, button, hold_frames, pause_frames)
+	drive_ai_attack(state, controls)
+
 func build_ai_controls(player: Node, target: Node) -> Dictionary:
 	var controls := empty_ai_controls()
+	var state := ai_state_for(player)
 	var cooldown: int = maxi(0, int(ai_jump_cooldowns.get(player.player_index, 0)) - 1)
 	ai_jump_cooldowns[player.player_index] = cooldown
 	var current_platform: int = ai_platform_graph.nearest_platform(player.position)
@@ -774,19 +1046,40 @@ func build_ai_controls(player: Node, target: Node) -> Dictionary:
 
 	if recovering:
 		destination = ai_platform_graph.platform_center(current_platform) if current_platform >= 0 else Vector2(500.0, 260.0)
+	elif is_instance_valid(active_weapon_crate) and bool(state.get("seek_crate", false)):
+		var crate_platform := ai_platform_graph.nearest_platform(active_weapon_crate.position)
+		next_platform = ai_platform_graph.next_platform_toward(current_platform, crate_platform)
+		destination = active_weapon_crate.position
+		if next_platform >= 0 and next_platform != current_platform:
+			destination = ai_platform_graph.platform_center(next_platform)
 	elif target != null:
 		var target_platform: int = ai_platform_graph.nearest_platform(target.position)
 		next_platform = ai_platform_graph.next_platform_toward(current_platform, target_platform)
 		destination = target.position
 		if next_platform >= 0 and next_platform != current_platform:
 			destination = ai_platform_graph.platform_center(next_platform)
+		elif current_platform == target_platform:
+			var combat_range := ai_combat_range(int(player.weapon_id))
+			var horizontal_distance := absf(target.position.x - player.position.x)
+			if horizontal_distance < combat_range.x:
+				var retreat_direction := -signf(target.position.x - player.position.x)
+				if is_zero_approx(retreat_direction):
+					retreat_direction = -1.0 if int(player.player_index) % 2 == 0 else 1.0
+				destination.x = player.position.x + retreat_direction * 90.0
+			elif horizontal_distance <= combat_range.y:
+				destination.x = player.position.x
 
 	var difference: Vector2 = destination - player.position
 	controls["left"] = difference.x < -20.0
 	controls["right"] = difference.x > 20.0
-	if target != null and not recovering:
+	if target != null and not recovering and not (is_instance_valid(active_weapon_crate) and bool(state.get("seek_crate", false))):
 		var target_difference: Vector2 = target.position - player.position
-		controls["primary"] = absf(target_difference.y) < 95.0
+		# Facing is also produced through the movement interface. A short step is
+		# enough to turn toward a target when range keeping has stopped horizontal
+		# chase movement.
+		if not controls["left"] and not controls["right"] and target_difference.x * float(player.facing) < -8.0:
+			controls["left"] = target_difference.x < 0.0
+			controls["right"] = target_difference.x > 0.0
 
 	var route_requires_jump := false
 	var route_requires_drop := false
@@ -803,12 +1096,26 @@ func build_ai_controls(player: Node, target: Node) -> Dictionary:
 		var platform: Rect2 = ai_platform_graph.platforms[current_platform]
 		var route_exits_left: bool = next_platform != current_platform and destination.x < player.position.x
 		var route_exits_right: bool = next_platform != current_platform and destination.x > player.position.x
-		if player.position.x <= platform.position.x + 24.0 and controls["left"] and not route_exits_left:
+		if player.position.x <= platform.position.x + 24.0 and not route_exits_left:
 			controls["left"] = false
-			controls["right"] = player.velocity.x < -1.5
-		if player.position.x >= platform.end.x - 24.0 and controls["right"] and not route_exits_right:
+			controls["right"] = true
+		if player.position.x >= platform.end.x - 24.0 and not route_exits_right:
 			controls["right"] = false
-			controls["left"] = player.velocity.x > 1.5
+			controls["left"] = true
+
+	var threat := find_ai_projectile_threat(player, current_platform)
+	if bool(threat.get("danger", false)):
+		# Danger interrupts this crate attempt, but the one-time 60% roll is not
+		# repeated for the same crate.
+		state["seek_crate"] = false
+		var evade_direction := int(threat.get("direction", 0))
+		controls["left"] = evade_direction < 0
+		controls["right"] = evade_direction > 0
+	elif not recovering:
+		var separation_direction := find_ai_overlap_direction(player, current_platform)
+		if separation_direction != 0:
+			controls["left"] = separation_direction < 0
+			controls["right"] = separation_direction > 0
 
 	var grounded := current_platform >= 0 and absf(player.position.y - ai_platform_graph.platforms[current_platform].position.y) <= 4.0 and absf(player.velocity.y) <= 1.0
 	var target_platform_is_higher := false
@@ -819,7 +1126,7 @@ func build_ai_controls(player: Node, target: Node) -> Dictionary:
 	# A normal chase on the same ledge must not cause a jump loop. Grounded
 	# agents jump only for a graph route, a real obstacle/high platform, or
 	# recovery. Extra jumps are reserved for an unreachable landing or rescue.
-	var wants_ground_jump := recovering or (grounded and (route_requires_jump or target_platform_is_higher))
+	var wants_ground_jump := recovering or (grounded and (route_requires_jump or target_platform_is_higher or (bool(threat.get("explosive", false)) and int(threat.get("direction", 0)) == 0)))
 	var wants_air_jump := false
 	if not grounded and player.jumps_remaining < player.max_jump_count():
 		var destination_platform_rect: Rect2 = ai_platform_graph.platforms[next_platform] if next_platform >= 0 else Rect2()
@@ -837,9 +1144,10 @@ func build_ai_controls(player: Node, target: Node) -> Dictionary:
 		# Leave enough time for the previous jump to develop before spending
 		# another jump, especially on Triple Jump.
 		ai_jump_cooldowns[player.player_index] = 7 if grounded else 10
-	if route_requires_drop and absf(difference.x) < 55.0:
+	if route_requires_drop and absf(difference.x) < 55.0 and not bool(threat.get("danger", false)):
 		controls["down"] = true
 		controls["down_just"] = true
+	apply_ai_weapon_controls(player, target, controls, state, threat)
 	return controls
 
 func find_landing_y(previous: Vector2, current: Vector2) -> float:
@@ -923,7 +1231,10 @@ func spawn_homing(shooter: Node, start: Vector2, direction: int, attack: Diction
 		{
 			"kind": "homing_split" if joke_variant else "homing",
 			"life": int(attack["life"]), "turning": float(attack.get("turning", 0.0)),
-			"homing_speed": float(attack["speed"]), "blast_radius": 50.0,
+			"homing_deploy_frames": int(attack.get("homing_deploy_frames", 10)),
+			"homing_speed_min": float(attack.get("homing_speed_min", attack["speed"])),
+			"homing_speed_max": float(attack.get("homing_speed_max", attack["speed"])),
+			"blast_radius": 50.0,
 			"split_frame": int(attack.get("split_frame", 18)),
 		}
 	)
@@ -1073,6 +1384,57 @@ func play_pickup_sound() -> void:
 
 func play_ui_sound() -> void:
 	play_random_sound([ButtonSound])
+
+func play_weapon_attack_sound(weapon_id: int, secondary: bool, remaining_ammo: int) -> void:
+	# Only weapons that previously had no attack-audio mapping are handled here.
+	# Existing default-weapon and charged-shot mappings remain untouched.
+	var stream: AudioStream
+	match weapon_id:
+		6:
+			# The original Shotgun controller deliberately calls snipe1.wav for
+			# both its five-pellet and BOOM attacks.
+			stream = Snipe1Sound
+		7:
+			stream = Snipe5Sound if secondary else Rifle2Sound
+		9:
+			stream = WhooshSound if secondary else Rifle1Sound
+		10:
+			stream = WhooshSound
+		11:
+			stream = SlideSound
+		13, 14:
+			stream = Smg2Sound
+		15:
+			if not secondary:
+				stream = Smg1Sound
+		16:
+			if not secondary:
+				stream = WhooshSound
+	if stream != null:
+		play_random_sound([stream], -6.0)
+
+	# In the original double-shell Shotgun timeline, every shot that leaves an
+	# even, non-zero shell count enters its mechanical cycling section. Preserve
+	# that sound-only sequence without changing the current fire rate or visuals.
+	if weapon_id == 6 and remaining_ammo > 0 and remaining_ammo % 2 == 0:
+		play_delayed_weapon_sound(Bolt1Sound, 6)
+		play_delayed_weapon_sound(PistolSlideSound, 19)
+		play_delayed_weapon_sound(PickupSound, 21)
+
+func play_delayed_weapon_sound(stream: AudioStream, delay_frames: int) -> void:
+	if stream == null or not is_inside_tree():
+		return
+	var sound_timer := Timer.new()
+	sound_timer.one_shot = true
+	sound_timer.wait_time = maxf(float(delay_frames) / 35.0, 0.001)
+	add_child(sound_timer)
+	sound_timer.timeout.connect(func() -> void:
+		if is_instance_valid(sound_timer):
+			if is_inside_tree():
+				play_random_sound([stream])
+			sound_timer.queue_free()
+	)
+	sound_timer.start()
 
 func play_reload_frame_sound(weapon_id: int, elapsed_frames: int) -> void:
 	var stream: AudioStream
@@ -1225,11 +1587,13 @@ func process_weapon_crate_spawning() -> void:
 	add_child(crate)
 	crate.setup(self, Vector2(spawn_points.pick_random(), -35.0), WeaponCatalog.CRATE_WEAPON_IDS.pick_random())
 	active_weapon_crate = crate
+	register_ai_crate_decisions()
 
 func on_weapon_crate_picked(crate: Node, player: Node, weapon_id: int) -> void:
 	if active_weapon_crate == crate:
 		active_weapon_crate = null
 	crate_spawn_frames = randi_range(210, 315)
+	clear_ai_crate_decisions()
 	play_pickup_sound()
 	spawn_crate_open_effect(crate.position)
 	effects.append({
@@ -1254,6 +1618,7 @@ func on_weapon_crate_lost(crate: Node) -> void:
 	if active_weapon_crate == crate:
 		active_weapon_crate = null
 	crate_spawn_frames = 70
+	clear_ai_crate_decisions()
 
 func spawn_crate_landing_effect(at_position: Vector2) -> void:
 	effects.append({"type": "crate_land", "position": at_position, "color": Color("ffd166"), "life": 8})
@@ -1262,6 +1627,7 @@ func clear_weapon_crate() -> void:
 	if is_instance_valid(active_weapon_crate):
 		active_weapon_crate.queue_free()
 	active_weapon_crate = null
+	clear_ai_crate_decisions()
 
 func on_player_eliminated(_player: Node) -> void:
 	var survivors := players.filter(func(candidate: Node) -> bool: return not candidate.eliminated)
@@ -1279,6 +1645,7 @@ func reset_match() -> void:
 	effects.clear()
 	clear_weapon_crate()
 	crate_spawn_frames = 105
+	reset_ai_states()
 	for index in players.size():
 		var active: bool = player_slot_types[index] != SlotType.EMPTY
 		players[index].set_ai_controlled(player_slot_types[index] == SlotType.AI)

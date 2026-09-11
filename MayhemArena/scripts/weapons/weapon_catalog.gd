@@ -131,11 +131,12 @@ const WEAPONS := {
 		"primary": {
 			"type": "homing", "damage": 32.0, "firepower": 32.0,
 			"speed": 12.0, "spread": 0.0, "recoil": 8.0, "cooldown": 35,
-			"turning": 3.0, "life": 100,
+			"turning": 1.1, "life": 100, "homing_deploy_frames": 10,
+			"homing_speed_min": 10.0, "homing_speed_max": 14.0,
 		},
 		"secondary": {
 			"type": "homing_split", "damage": 32.0, "firepower": 32.0,
-			"speed": 10.0, "spread": 0.0, "recoil": 8.0, "cooldown": 35,
+			"speed": 10.0, "spread": 0.0, "recoil": 8.0, "cooldown": 30,
 			"windup_frames": 4, "split_frame": 18, "life": 70,
 		},
 	},
@@ -160,7 +161,7 @@ const WEAPONS := {
 	12: {
 		"name": "SNIPER", "tagline": "Slow, accurate and devastating",
 		"primary_label": "Sniper Shot", "secondary_label": "Aimed Shot", "ammo": 5, "crate_only": true,
-		"primary": {"type": "bullet", "firepower": 65.0, "speed": 25.0, "spread": 1.0, "recoil": 5.0, "cooldown": 48, "charge_frames": 11, "aim_pose_frame": 16},
+		"primary": {"type": "bullet", "firepower": 65.0, "speed": 25.0, "spread": 1.0, "recoil": 5.0, "cooldown": 18, "charge_frames": 11, "aim_pose_frame": 16},
 		"secondary": {"type": "sniper_stealth", "cooldown": 1, "semi_auto": true},
 	},
 	13: {

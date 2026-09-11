@@ -425,7 +425,11 @@ func process_weapons() -> void:
 		secondary_was_pressed = secondary_pressed
 		return
 
-	if process_charged_attack(primary, false, primary_pressed, primary_cooldown == 0 and not visual_action_active and weapon_id == 12):
+	# Sniper may begin its next aim after the short firing recovery even while
+	# the previous 53-frame cosmetic controller is still finishing. The aim pose
+	# cleanly overrides that controller, so visuals no longer dictate fire rate.
+	var sniper_can_aim := weapon_id == 12 and primary_cooldown == 0
+	if process_charged_attack(primary, false, primary_pressed, sniper_can_aim):
 		primary_was_pressed = primary_pressed
 		secondary_was_pressed = secondary_pressed
 		return
@@ -654,6 +658,8 @@ func fire_attack(attack: Dictionary, secondary: bool, charged_release: bool = fa
 		"katana_uppercut":
 			velocity.y = -9.0
 			arena.melee_attack(self, 75.0, -80.0, 30.0, 20.0, 25.0, -10.0, 2, true, 20.0, 0, "OUCH :(")
+	if not charged_release and is_instance_valid(arena):
+		arena.play_weapon_attack_sound(weapon_id, secondary, ammo)
 
 func process_katana_events() -> void:
 	for index in range(katana_events.size() - 1, -1, -1):

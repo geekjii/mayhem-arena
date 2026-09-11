@@ -13,8 +13,12 @@ var blast_radius := 0.0
 var gravity := 0.0
 var age := 0
 var max_age := 240
-var homing_turn := 0.0
-var homing_speed := 0.0
+var homing_acceleration := 0.0
+var homing_deploy_frames := 10
+var homing_speed_limit := 0.0
+var homing_velocity := Vector2.ZERO
+var homing_launch_direction := Vector2.RIGHT
+var homing_visual_angle := 0.0
 var bounce := false
 var visual_scale_x := 100.0
 var bomb_detonation_frames := -1
@@ -50,8 +54,11 @@ func setup(
 	blast_radius = float(options.get("blast_radius", 0.0))
 	gravity = float(options.get("gravity", 0.0))
 	max_age = int(options.get("life", 240))
-	homing_turn = float(options.get("turning", 0.0))
-	homing_speed = float(options.get("homing_speed", speed))
+	homing_acceleration = float(options.get("turning", 0.0))
+	homing_deploy_frames = int(options.get("homing_deploy_frames", 10))
+	var homing_speed_min := float(options.get("homing_speed_min", speed))
+	var homing_speed_max := float(options.get("homing_speed_max", speed))
+	homing_speed_limit = randf_range(minf(homing_speed_min, homing_speed_max), maxf(homing_speed_min, homing_speed_max))
 	bounce = bool(options.get("bounce", false))
 	split_frame = int(options.get("split_frame", 18))
 	collides_with_platforms = bool(options.get("platform_collision", true))
@@ -62,7 +69,9 @@ func setup(
 		visual_scale_x = 70.0
 	var angle_offset := float(options.get("angle_offset", 0.0)) * facing
 	var angle := deg_to_rad(-90.0 + 90.0 * facing + angle_offset + randf_range(-spread_degrees * 0.5, spread_degrees * 0.5))
-	velocity = Vector2(cos(angle), sin(angle)) * speed
+	homing_launch_direction = Vector2(cos(angle), sin(angle))
+	homing_visual_angle = angle
+	velocity = homing_launch_direction * speed
 	z_index = 20
 	queue_redraw()
 
@@ -181,27 +190,32 @@ func detonate(at_position: Vector2) -> void:
 	queue_free()
 
 func steer_to_closest_target() -> void:
-	if age < 18:
-		return
-	var closest: Node = null
-	var closest_distance := INF
-	for target in arena.players:
-		if target == shooter or target.eliminated:
-			continue
-		var distance := position.distance_to(target.position + Vector2(0, -24))
-		if distance < closest_distance:
-			closest_distance = distance
-			closest = target
-	if closest == null:
-		return
-	var desired_direction := position.direction_to(closest.position + Vector2(0, -24))
-	if desired_direction == Vector2.ZERO:
-		return
-	var current_angle := velocity.angle()
-	var desired_angle := desired_direction.angle()
-	var maximum_turn := deg_to_rad(maxf(homing_turn, 0.1))
-	var turn_delta := clampf(angle_difference(current_angle, desired_angle), -maximum_turn, maximum_turn)
-	velocity = Vector2.RIGHT.rotated(current_angle + turn_delta) * homing_speed
+	# Original Flash behavior: fly with the launch vector for ten frames while
+	# building a separate inertial velocity. Once deployed, move with that
+	# accumulated velocity and add a 1.1-unit seek vector toward the nearest
+	# target every frame. There is no fixed angular turn limit.
+	if age > homing_deploy_frames:
+		velocity = homing_velocity
+	var desired_direction := homing_launch_direction
+	if age > homing_deploy_frames:
+		var closest: Node = null
+		var closest_distance := INF
+		for target in arena.players:
+			if target == shooter or target.eliminated:
+				continue
+			var distance := position.distance_to(target.position + Vector2(0, -24))
+			if distance < closest_distance:
+				closest_distance = distance
+				closest = target
+		if closest != null:
+			var target_direction := position.direction_to(closest.position + Vector2(0, -24))
+			if target_direction != Vector2.ZERO:
+				desired_direction = target_direction
+	homing_visual_angle = lerp_angle(homing_visual_angle, desired_direction.angle(), 0.2)
+	homing_velocity += desired_direction * homing_acceleration
+	var accumulated_speed := homing_velocity.length()
+	if accumulated_speed > homing_speed_limit and accumulated_speed > 0.0:
+		homing_velocity *= homing_speed_limit / accumulated_speed
 
 func _draw() -> void:
 	if projectile_kind in ["bullet", "bullet_shell"]:
@@ -239,7 +253,8 @@ func _draw() -> void:
 		draw_circle(Vector2.ZERO, 5.5, Color("f3f0e8"))
 		draw_arc(Vector2.ZERO, 3.2, -1.1, 1.1, 6, Color("d94b3d"), 1.2)
 	elif projectile_kind in ["homing", "homing_jokes", "homing_split", "split_missile"]:
-		draw_set_transform(Vector2.ZERO, velocity.angle(), Vector2.ONE)
+		var missile_angle := homing_visual_angle if projectile_kind in ["homing", "homing_jokes"] else velocity.angle()
+		draw_set_transform(Vector2.ZERO, missile_angle, Vector2.ONE)
 		var missile_color := Color("8bd14b") if projectile_kind == "homing_jokes" else Color("d7d9dc")
 		draw_colored_polygon(PackedVector2Array([Vector2(-12, -5), Vector2(8, -5), Vector2(14, 0), Vector2(8, 5), Vector2(-12, 5)]), missile_color)
 		draw_polyline(PackedVector2Array([Vector2(-12, -5), Vector2(8, -5), Vector2(14, 0), Vector2(8, 5), Vector2(-12, 5), Vector2(-12, -5)]), Color("202020"), 2.0)
